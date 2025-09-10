@@ -23,6 +23,42 @@ type AccountsPayload = {
   };
 };
 
+type Contact = {
+  id: string | number;
+  // BE bazı yerlerde "name", bazı yerlerde first/last dönebilir
+  name?: string | null;
+  first_name?: string | null;
+  last_name?: string | null;
+
+  email?: string | null;
+  phone?: string | null;
+  title?: string | null;
+  notes?: string | null;
+
+  account_id?: number | null;
+  account_name?: string | null;
+
+  created_at?: string | null;
+};
+
+type ContactsPayload = {
+  items: Contact[];
+  meta?: {
+    page?: number;
+    page_size?: number;
+    total?: number;
+    has_next?: boolean;
+    has_prev?: boolean;
+  };
+};
+
+/* ----------------- Yardımcılar ----------------- */
+const fmtDate = (s?: string | null) => (s ? new Date(s).toLocaleString() : "—");
+const fullName = (c: Contact) =>
+  c.name ||
+  [c.first_name, c.last_name].filter(Boolean).join(" ").trim() ||
+  "—";
+
 /* ----------------- Basit sayfalar ----------------- */
 function Dashboard() {
   const [count, setCount] = useState(0);
@@ -66,7 +102,7 @@ function Accounts() {
         params: { page, page_size: pageSize, q },
       });
 
-      // API bazen {items, meta}, bazen sadece [] dönebilir — defansif ol
+      // API bazen {items, meta}, bazen [] dönebilir — defansif ol
       let payload: AccountsPayload;
       if (Array.isArray(res.data)) {
         payload = { items: res.data, meta: { page, page_size: pageSize } };
@@ -82,9 +118,7 @@ function Accounts() {
       console.log("GET /accounts response:", res.data);
     } catch (err: any) {
       const msg =
-        err?.response?.data?.detail ||
-        err?.message ||
-        "Unknown error";
+        err?.response?.data?.detail || err?.message || "Unknown error";
       setError(msg);
     } finally {
       setLoading(false);
@@ -208,15 +242,168 @@ function Accounts() {
   );
 }
 
+/* ----------------- Contacts (GERÇEK VERİ + arama/sayfa) ----------------- */
 function Contacts() {
+  const [items, setItems] = useState<Contact[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(10);
+
+  const [total, setTotal] = useState<number | undefined>(undefined);
+  const [hasNext, setHasNext] = useState<boolean | undefined>(undefined);
+  const [hasPrev, setHasPrev] = useState<boolean | undefined>(undefined);
+
+  const fetchContacts = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await api.get("/contacts/", {
+        params: { page, page_size: pageSize, q },
+      });
+
+      let payload: ContactsPayload;
+      if (Array.isArray(res.data)) {
+        payload = { items: res.data, meta: { page, page_size: pageSize } };
+      } else {
+        payload = res.data as ContactsPayload;
+      }
+
+      setItems(payload.items ?? []);
+      setTotal(payload.meta?.total);
+      setHasNext(payload.meta?.has_next);
+      setHasPrev(payload.meta?.has_prev);
+
+      console.log("GET /contacts response:", res.data);
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.detail || err?.message || "Unknown error";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchContacts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, pageSize]);
+
+  const onSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPage(1);
+    fetchContacts();
+  };
+
   return (
     <div className="bg-white rounded-xl shadow p-6">
-      <h2 className="text-lg font-medium mb-4">Contacts</h2>
-      <p className="text-sm text-gray-600">Contacts list will be displayed.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <h2 className="text-lg font-medium">Contacts</h2>
+
+        <form onSubmit={onSearch} className="flex gap-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search name, email, phone…"
+            className="px-3 py-1.5 rounded-md border text-sm w-64"
+          />
+          <button
+            type="submit"
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
+            Search
+          </button>
+          <button
+            type="button"
+            onClick={fetchContacts}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
+            Refresh
+          </button>
+        </form>
+      </div>
+
+      {loading && <div className="text-sm text-gray-500">Loading contacts…</div>}
+      {error && <div className="text-sm text-red-600">Error: {error}</div>}
+      {!loading && !error && items.length === 0 && (
+        <div className="text-sm text-gray-500">
+          No contacts yet. Add some in Swagger, then click <b>Refresh</b>.
+        </div>
+      )}
+
+      {!loading && !error && items.length > 0 && (
+        <>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="py-2 pr-4">Name</th>
+                  <th className="py-2 pr-4">Title</th>
+                  <th className="py-2 pr-4">Email</th>
+                  <th className="py-2 pr-4">Phone</th>
+                  <th className="py-2 pr-4">Account</th>
+                  <th className="py-2 pr-4">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((c) => (
+                  <tr key={c.id} className="border-b last:border-0">
+                    <td className="py-2 pr-4 font-medium">{fullName(c)}</td>
+                    <td className="py-2 pr-4">{c.title ?? "—"}</td>
+                    <td className="py-2 pr-4">
+                      {c.email ? (
+                        <a
+                          href={`mailto:${c.email}`}
+                          className="text-indigo-600 hover:underline"
+                        >
+                          {c.email}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="py-2 pr-4">{c.phone ?? "—"}</td>
+                    <td className="py-2 pr-4">
+                      {c.account_name ?? c.account_id ?? "—"}
+                    </td>
+                    <td className="py-2 pr-4">{fmtDate(c.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between mt-4 text-sm">
+            <div className="text-gray-500">
+              Page {page}
+              {typeof total === "number" ? <> • Total: {total}</> : null}
+            </div>
+            <div className="flex gap-2">
+              <button
+                disabled={hasPrev === false || page === 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+              >
+                ‹ Prev
+              </button>
+              <button
+                disabled={hasNext === false}
+                onClick={() => setPage((p) => p + 1)}
+                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+              >
+                Next ›
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
+/* ----------------- Placeholder sayfalar ----------------- */
 function Deals() {
   return (
     <div className="bg-white rounded-xl shadow p-6">
@@ -245,6 +432,7 @@ function usePageTitle() {
   return "Dashboard";
 }
 
+/* ----------------- Root ----------------- */
 export default function App() {
   const title = usePageTitle();
 
