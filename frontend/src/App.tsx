@@ -25,19 +25,15 @@ type AccountsPayload = {
 
 type Contact = {
   id: string | number;
-  // BE bazı yerlerde "name", bazı yerlerde first/last dönebilir
   name?: string | null;
   first_name?: string | null;
   last_name?: string | null;
-
   email?: string | null;
   phone?: string | null;
   title?: string | null;
   notes?: string | null;
-
   account_id?: number | null;
   account_name?: string | null;
-
   created_at?: string | null;
 };
 
@@ -52,14 +48,41 @@ type ContactsPayload = {
   };
 };
 
+type Opportunity = {
+  id: string | number;
+  name: string;
+  stage?: string | null;
+  amount?: number | string | null;
+  owner_name?: string | null;
+  account_name?: string | null;
+  created_at?: string | null;
+};
+
+type OpportunitiesPayload = {
+  items: Opportunity[];
+  meta?: {
+    page?: number;
+    page_size?: number;
+    total?: number;
+    has_next?: boolean;
+    has_prev?: boolean;
+  };
+};
+
 /* ----------------- Yardımcılar ----------------- */
 const fmtDate = (s?: string | null) => (s ? new Date(s).toLocaleString() : "—");
 const fullName = (c: Contact) =>
-  c.name ||
-  [c.first_name, c.last_name].filter(Boolean).join(" ").trim() ||
-  "—";
+  c.name || [c.first_name, c.last_name].filter(Boolean).join(" ").trim() || "—";
+const toNumber = (n?: number | string | null) =>
+  n == null ? undefined : typeof n === "number" ? n : Number(n);
+const fmtMoney = (n?: number | string | null) => {
+  const v = toNumber(n);
+  return typeof v === "number" && !Number.isNaN(v)
+    ? v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+    : "—";
+};
 
-/* ----------------- Basit sayfalar ----------------- */
+/* ----------------- Dashboard ----------------- */
 function Dashboard() {
   const [count, setCount] = useState(0);
   return (
@@ -78,18 +101,16 @@ function Dashboard() {
   );
 }
 
-/* ----------------- Accounts (GERÇEK VERİ + arama/sayfa) ----------------- */
+/* ----------------- Accounts ----------------- */
 function Accounts() {
   const [items, setItems] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // filtreler
   const [q, setQ] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
 
-  // meta (opsiyonel)
   const [total, setTotal] = useState<number | undefined>(undefined);
   const [hasNext, setHasNext] = useState<boolean | undefined>(undefined);
   const [hasPrev, setHasPrev] = useState<boolean | undefined>(undefined);
@@ -102,7 +123,6 @@ function Accounts() {
         params: { page, page_size: pageSize, q },
       });
 
-      // API bazen {items, meta}, bazen [] dönebilir — defansif ol
       let payload: AccountsPayload;
       if (Array.isArray(res.data)) {
         payload = { items: res.data, meta: { page, page_size: pageSize } };
@@ -117,8 +137,7 @@ function Accounts() {
 
       console.log("GET /accounts response:", res.data);
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.detail || err?.message || "Unknown error";
+      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
       setError(msg);
     } finally {
       setLoading(false);
@@ -128,7 +147,7 @@ function Accounts() {
   useEffect(() => {
     fetchAccounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, pageSize]); // arama submit ile tetiklenecek
+  }, [page, pageSize]);
 
   const onSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,7 +157,6 @@ function Accounts() {
 
   return (
     <div className="bg-white rounded-xl shadow p-6">
-      {/* Üst başlık, arama ve refresh */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <h2 className="text-lg font-medium">Accounts</h2>
 
@@ -149,23 +167,15 @@ function Accounts() {
             placeholder="Search name, industry…"
             className="px-3 py-1.5 rounded-md border text-sm w-64"
           />
-          <button
-            type="submit"
-            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
-          >
+          <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
             Search
           </button>
-          <button
-            type="button"
-            onClick={fetchAccounts}
-            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
-          >
+          <button type="button" onClick={fetchAccounts} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
             Refresh
           </button>
         </form>
       </div>
 
-      {/* durumlar */}
       {loading && <div className="text-sm text-gray-500">Loading accounts…</div>}
       {error && <div className="text-sm text-red-600">Error: {error}</div>}
       {!loading && !error && items.length === 0 && (
@@ -174,7 +184,6 @@ function Accounts() {
         </div>
       )}
 
-      {/* liste */}
       {!loading && !error && items.length > 0 && (
         <>
           <div className="overflow-x-auto">
@@ -194,12 +203,7 @@ function Accounts() {
                     <td className="py-2 pr-4">{a.industry ?? "—"}</td>
                     <td className="py-2 pr-4">
                       {a.website ? (
-                        <a
-                          href={a.website}
-                          className="text-indigo-600 hover:underline"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
+                        <a href={a.website} className="text-indigo-600 hover:underline" target="_blank" rel="noreferrer">
                           {a.website}
                         </a>
                       ) : (
@@ -213,36 +217,14 @@ function Accounts() {
             </table>
           </div>
 
-          {/* sayfalama */}
-          <div className="flex items-center justify-between mt-4 text-sm">
-            <div className="text-gray-500">
-              Page {page}
-              {typeof total === "number" ? <> • Total: {total}</> : null}
-            </div>
-            <div className="flex gap-2">
-              <button
-                disabled={hasPrev === false || page === 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
-              >
-                ‹ Prev
-              </button>
-              <button
-                disabled={hasNext === false}
-                onClick={() => setPage((p) => p + 1)}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
-              >
-                Next ›
-              </button>
-            </div>
-          </div>
+          <Pager page={page} setPage={setPage} total={total} hasNext={hasNext} hasPrev={hasPrev} />
         </>
       )}
     </div>
   );
 }
 
-/* ----------------- Contacts (GERÇEK VERİ + arama/sayfa) ----------------- */
+/* ----------------- Contacts ----------------- */
 function Contacts() {
   const [items, setItems] = useState<Contact[]>([]);
   const [loading, setLoading] = useState(true);
@@ -278,8 +260,7 @@ function Contacts() {
 
       console.log("GET /contacts response:", res.data);
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.detail || err?.message || "Unknown error";
+      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
       setError(msg);
     } finally {
       setLoading(false);
@@ -309,17 +290,10 @@ function Contacts() {
             placeholder="Search name, email, phone…"
             className="px-3 py-1.5 rounded-md border text-sm w-64"
           />
-          <button
-            type="submit"
-            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
-          >
+          <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
             Search
           </button>
-          <button
-            type="button"
-            onClick={fetchContacts}
-            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
-          >
+          <button type="button" onClick={fetchContacts} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
             Refresh
           </button>
         </form>
@@ -328,9 +302,7 @@ function Contacts() {
       {loading && <div className="text-sm text-gray-500">Loading contacts…</div>}
       {error && <div className="text-sm text-red-600">Error: {error}</div>}
       {!loading && !error && items.length === 0 && (
-        <div className="text-sm text-gray-500">
-          No contacts yet. Add some in Swagger, then click <b>Refresh</b>.
-        </div>
+        <div className="text-sm text-gray-500">No contacts yet. Add some in Swagger, then click <b>Refresh</b>.</div>
       )}
 
       {!loading && !error && items.length > 0 && (
@@ -353,21 +325,10 @@ function Contacts() {
                     <td className="py-2 pr-4 font-medium">{fullName(c)}</td>
                     <td className="py-2 pr-4">{c.title ?? "—"}</td>
                     <td className="py-2 pr-4">
-                      {c.email ? (
-                        <a
-                          href={`mailto:${c.email}`}
-                          className="text-indigo-600 hover:underline"
-                        >
-                          {c.email}
-                        </a>
-                      ) : (
-                        "—"
-                      )}
+                      {c.email ? <a href={`mailto:${c.email}`} className="text-indigo-600 hover:underline">{c.email}</a> : "—"}
                     </td>
                     <td className="py-2 pr-4">{c.phone ?? "—"}</td>
-                    <td className="py-2 pr-4">
-                      {c.account_name ?? c.account_id ?? "—"}
-                    </td>
+                    <td className="py-2 pr-4">{c.account_name ?? c.account_id ?? "—"}</td>
                     <td className="py-2 pr-4">{fmtDate(c.created_at)}</td>
                   </tr>
                 ))}
@@ -375,49 +336,184 @@ function Contacts() {
             </table>
           </div>
 
-          <div className="flex items-center justify-between mt-4 text-sm">
-            <div className="text-gray-500">
-              Page {page}
-              {typeof total === "number" ? <> • Total: {total}</> : null}
-            </div>
-            <div className="flex gap-2">
-              <button
-                disabled={hasPrev === false || page === 1}
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
-              >
-                ‹ Prev
-              </button>
-              <button
-                disabled={hasNext === false}
-                onClick={() => setPage((p) => p + 1)}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
-              >
-                Next ›
-              </button>
-            </div>
-          </div>
+          <Pager page={page} setPage={setPage} total={total} hasNext={hasNext} hasPrev={hasPrev} />
         </>
       )}
     </div>
   );
 }
 
-/* ----------------- Placeholder sayfalar ----------------- */
+/* ----------------- Deals / Opportunities ----------------- */
 function Deals() {
+  const [items, setItems] = useState<Opportunity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(10);
+
+  const [total, setTotal] = useState<number | undefined>(undefined);
+  const [hasNext, setHasNext] = useState<boolean | undefined>(undefined);
+  const [hasPrev, setHasPrev] = useState<boolean | undefined>(undefined);
+
+  // Aynı kod hem /opportunities/ hem /deals/ ile çalışsın:
+  const fetchDeals = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const tryFetch = async (path: string) =>
+        api.get(path, { params: { page, page_size: pageSize, q } });
+
+      let res;
+      try {
+        res = await tryFetch("/opportunities/");
+      } catch (e: any) {
+        // 404, 405 veya ağ hatası durumunda diğer endpoint'i dene
+        res = await tryFetch("/deals/");
+      }
+
+      let payload: OpportunitiesPayload;
+      if (Array.isArray(res.data)) {
+        payload = { items: res.data, meta: { page, page_size: pageSize } };
+      } else {
+        payload = res.data as OpportunitiesPayload;
+      }
+
+      setItems(payload.items ?? []);
+      setTotal(payload.meta?.total);
+      setHasNext(payload.meta?.has_next);
+      setHasPrev(payload.meta?.has_prev);
+
+      console.log("GET /opportunities|/deals response:", res.data);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchDeals();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, pageSize]);
+
+  const onSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPage(1);
+    fetchDeals();
+  };
+
   return (
     <div className="bg-white rounded-xl shadow p-6">
-      <h2 className="text-lg font-medium mb-4">Opportunities</h2>
-      <p className="text-sm text-gray-600">Kanban pipeline will live here.</p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <h2 className="text-lg font-medium">Opportunities</h2>
+
+        <form onSubmit={onSearch} className="flex gap-2">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search name, stage…"
+            className="px-3 py-1.5 rounded-md border text-sm w-64"
+          />
+          <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
+            Search
+          </button>
+          <button type="button" onClick={fetchDeals} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
+            Refresh
+          </button>
+        </form>
+      </div>
+
+      {loading && <div className="text-sm text-gray-500">Loading opportunities…</div>}
+      {error && <div className="text-sm text-red-600">Error: {error}</div>}
+      {!loading && !error && items.length === 0 && (
+        <div className="text-sm text-gray-500">No opportunities yet. Add some in Swagger, then click <b>Refresh</b>.</div>
+      )}
+
+      {!loading && !error && items.length > 0 && (
+        <>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left border-b">
+                  <th className="py-2 pr-4">Name</th>
+                  <th className="py-2 pr-4">Stage</th>
+                  <th className="py-2 pr-4">Amount</th>
+                  <th className="py-2 pr-4">Account</th>
+                  <th className="py-2 pr-4">Owner</th>
+                  <th className="py-2 pr-4">Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((o) => (
+                  <tr key={o.id} className="border-b last:border-0">
+                    <td className="py-2 pr-4 font-medium">{o.name}</td>
+                    <td className="py-2 pr-4">{o.stage ?? "—"}</td>
+                    <td className="py-2 pr-4">{fmtMoney(o.amount)}</td>
+                    <td className="py-2 pr-4">{o.account_name ?? "—"}</td>
+                    <td className="py-2 pr-4">{o.owner_name ?? "—"}</td>
+                    <td className="py-2 pr-4">{fmtDate(o.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <Pager page={page} setPage={setPage} total={total} hasNext={hasNext} hasPrev={hasPrev} />
+        </>
+      )}
     </div>
   );
 }
 
+/* ----------------- Reports ----------------- */
 function Reports() {
   return (
     <div className="bg-white rounded-xl shadow p-6">
       <h2 className="text-lg font-medium mb-4">Reports</h2>
       <p className="text-sm text-gray-600">KPIs, charts and summaries.</p>
+    </div>
+  );
+}
+
+/* ----------------- Ortak: Sayfalama ----------------- */
+function Pager({
+  page,
+  setPage,
+  total,
+  hasNext,
+  hasPrev,
+}: {
+  page: number;
+  setPage: React.Dispatch<React.SetStateAction<number>>;
+  total?: number;
+  hasNext?: boolean;
+  hasPrev?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between mt-4 text-sm">
+      <div className="text-gray-500">
+        Page {page}
+        {typeof total === "number" ? <> • Total: {total}</> : null}
+      </div>
+      <div className="flex gap-2">
+        <button
+          disabled={hasPrev === false || page === 1}
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+        >
+          ‹ Prev
+        </button>
+        <button
+          disabled={hasNext === false}
+          onClick={() => setPage((p) => p + 1)}
+          className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+        >
+          Next ›
+        </button>
+      </div>
     </div>
   );
 }
@@ -442,8 +538,7 @@ export default function App() {
       const info = res?.data?.info || {};
       alert(`OK: ${info.title || "-"} v${info.version || "-"}`);
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.detail || err?.message || "Unknown error";
+      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
       alert("ERROR: " + msg);
     }
   };
@@ -458,8 +553,7 @@ export default function App() {
       alert(`Accounts OK: ${list.length} item(s) (first page)`);
       console.log("GET /accounts response:", res.data);
     } catch (err: any) {
-      const msg =
-        err?.response?.data?.detail || err?.message || "Unknown error";
+      const msg = err?.response?.data?.detail || err?.message || "Unknown error";
       alert("Accounts ERROR: " + msg);
       console.error(err);
     }
@@ -474,57 +568,11 @@ export default function App() {
         </div>
 
         <nav className="flex-1 p-4 space-y-2">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Dashboard
-          </NavLink>
-          <NavLink
-            to="/accounts"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Accounts
-          </NavLink>
-          <NavLink
-            to="/contacts"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Contacts
-          </NavLink>
-          <NavLink
-            to="/deals"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Opportunities
-          </NavLink>
-          <NavLink
-            to="/reports"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Reports
-          </NavLink>
+          <NavLink to="/" end className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Dashboard</NavLink>
+          <NavLink to="/accounts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Accounts</NavLink>
+          <NavLink to="/contacts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Contacts</NavLink>
+          <NavLink to="/deals" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Opportunities</NavLink>
+          <NavLink to="/reports" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Reports</NavLink>
         </nav>
       </aside>
 
@@ -534,21 +582,9 @@ export default function App() {
         <header className="h-16 bg-white border-b shadow-sm flex items-center justify-between px-6">
           <h1 className="text-xl font-semibold">{title}</h1>
           <div className="flex items-center space-x-2">
-            <button
-              onClick={testAccounts}
-              className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
-            >
-              Test Accounts
-            </button>
-            <button
-              onClick={ping}
-              className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
-            >
-              Ping API
-            </button>
-            <button className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500">
-              + New
-            </button>
+            <button onClick={testAccounts} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">Test Accounts</button>
+            <button onClick={ping} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">Ping API</button>
+            <button className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500">+ New</button>
             <span className="text-sm text-gray-500">user@example.com</span>
           </div>
         </header>
