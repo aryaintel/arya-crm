@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, asc
 
 from .deps import get_db, get_current_user, CurrentUser, require_permissions
-from app.models import Account, Pipeline, Stage, Opportunity
+from ..models import Account, Pipeline, Stage, Opportunity
 
 router = APIRouter(prefix="/deals", tags=["deals"])
 

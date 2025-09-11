@@ -4,11 +4,13 @@ import DashboardPage from "./pages/Dashboard";
 import AccountsPage from "./pages/Accounts";
 import ContactsPage from "./pages/Contacts";
 import DealsPage from "./pages/Deals";
+import UsersPage from "./pages/Users"; // ← eklendi
 
 function usePageTitle() {
   const { pathname } = useLocation();
   if (pathname.startsWith("/accounts")) return "Accounts";
   if (pathname.startsWith("/contacts")) return "Contacts";
+  if (pathname.startsWith("/users")) return "Users";        // ← eklendi
   if (pathname.startsWith("/deals")) return "Opportunities";
   return "Dashboard";
 }
@@ -27,6 +29,7 @@ export default function App() {
           <NavLink to="/" end className={({isActive})=>`block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive?"bg-indigo-100 text-indigo-700":""}`}>Dashboard</NavLink>
           <NavLink to="/accounts" className={({isActive})=>`block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive?"bg-indigo-100 text-indigo-700":""}`}>Accounts</NavLink>
           <NavLink to="/contacts" className={({isActive})=>`block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive?"bg-indigo-100 text-indigo-700":""}`}>Contacts</NavLink>
+          <NavLink to="/users" className={({isActive})=>`block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive?"bg-indigo-100 text-indigo-700":""}`}>Users</NavLink> {/* ← eklendi */}
           <NavLink to="/deals" className={({isActive})=>`block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive?"bg-indigo-100 text-indigo-700":""}`}>Opportunities</NavLink>
         </nav>
       </aside>
@@ -45,6 +48,7 @@ export default function App() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/contacts" element={<ContactsPage />} />
+            <Route path="/users" element={<UsersPage />} /> {/* ← eklendi */}
             <Route path="/deals" element={<DealsPage />} />
           </Routes>
         </main>

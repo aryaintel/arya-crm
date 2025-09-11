@@ -1,10 +1,9 @@
-# backend/app/main.py
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
-from .api import auth, secure, accounts, contacts, deals
+from .api import auth, secure, accounts, contacts, deals, users  # ← users eklendi
 
 app = FastAPI(title="Arya CRM API")
 
@@ -52,3 +51,4 @@ app.include_router(secure.router)
 app.include_router(accounts.router)
 app.include_router(contacts.router)
 app.include_router(deals.router)
+app.include_router(users.router)  # ← users router burada bağlandı

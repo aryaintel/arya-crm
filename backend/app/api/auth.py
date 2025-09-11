@@ -4,9 +4,9 @@ from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Tenant, User, Role
+from ..models import Tenant, User, Role
 from .deps import get_db
-from app.core.security import hash_password, verify_password, create_access_token
+from ..core.security import hash_password, verify_password, create_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 

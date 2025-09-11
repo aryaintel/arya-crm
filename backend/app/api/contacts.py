@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from .deps import get_db, get_current_user, CurrentUser, require_permissions
-from app.models import Contact, Account
+from ..models import Contact, Account
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 

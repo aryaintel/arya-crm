@@ -10,8 +10,7 @@ from sqlalchemy import or_, func
 
 from ..models import Account
 from .deps import get_db, get_current_user, CurrentUser, require_permissions
-from app.core.deps import get_db
-from app.api.deps import get_current_user, CurrentUser, require_permissions
+
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 

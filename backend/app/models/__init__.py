@@ -11,7 +11,7 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import declarative_base, relationship
-from app.core.config import engine
+from ..core.config import engine
 
 # SQLAlchemy Base
 Base = declarative_base()
