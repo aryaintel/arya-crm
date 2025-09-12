@@ -1,5 +1,6 @@
+// src/pages/Contacts.tsx
 import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type Contact = {
   id: number | string;
@@ -17,13 +18,11 @@ type Contact = {
 
 type ContactsPayload = {
   items: Contact[];
-  // Backend top-level meta kullanıyorsa:
   page?: number;
   size?: number;
   total?: number;
   has_next?: boolean;
   has_prev?: boolean;
-  // Ya da meta içinde olabilir; her iki duruma da esnek davranacağız.
   meta?: {
     page?: number;
     size?: number;
@@ -38,7 +37,6 @@ export default function ContactsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Search & paging (Contacts: search/page/size)
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [size] = useState(20);
@@ -57,14 +55,12 @@ export default function ContactsPage() {
     notes: "",
     account_id: "" as string | number | "",
     owner_id: "" as string | number | "",
-    // sadece görüntü için (readonly)
     account_name: "",
     owner_name: "",
   });
 
   const isValid = useMemo(() => (form.name || "").trim().length > 1, [form]);
 
-  // URL helper (Accounts ile paralel)
   const byIdUrl = (id: number | string) => `/contacts/${id}/`;
   const byIdUrlNoSlash = (id: number | string) => `/contacts/${id}`;
 
@@ -72,27 +68,35 @@ export default function ContactsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<ContactsPayload>("/contacts/", {
-        params: { page: p, size, search: search || undefined },
+      const qs = new URLSearchParams({
+        page: String(p),
+        size: String(size),
       });
+      if (search.trim()) qs.set("search", search.trim());
 
-      const data = res.data;
+      const data = await apiGet<ContactsPayload>(`/contacts/?${qs.toString()}`);
 
-      // items
-      const list = Array.isArray((data as any).items) ? (data as any).items : (Array.isArray(data) ? data as any : []);
+      // items: (obj.items) ya da doğrudan dizi gelebilir
+      const list: Contact[] = Array.isArray((data as any).items)
+        ? ((data as any).items as Contact[])
+        : (Array.isArray(data as any) ? ((data as any) as Contact[]) : []);
+
       setItems(list);
 
-      // meta (top-level veya meta içinde olabilir)
+      // meta top-level ya da data.meta olabilir
       const meta = data.meta ?? data;
       setTotal(meta?.total);
       setHasNext(meta?.has_next);
       setHasPrev(meta?.has_prev);
 
-      // eğer BE mevcut sayfayı döndürüyorsa onu esas al
       if (typeof meta?.page === "number") setPage(meta.page);
       else setPage(p);
     } catch (e: any) {
-      setError(e?.response?.data?.detail || e?.message || "Contacts fetch failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.message ||
+        "Contacts fetch failed";
+      setError(String(msg));
     } finally {
       setLoading(false);
     }
@@ -103,7 +107,6 @@ export default function ContactsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Accounts ile aynı buton düzeni: Search / Refresh / + New
   const onSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
@@ -146,87 +149,67 @@ export default function ContactsPage() {
     if (!confirm(`Delete contact "${row.name ?? row.id}"?`)) return;
     try {
       try {
-        await api.delete(byIdUrl(row.id));
+        await apiDelete(byIdUrl(row.id));
       } catch {
-        await api.delete(byIdUrlNoSlash(row.id));
+        await apiDelete(byIdUrlNoSlash(row.id));
       }
       await fetchContacts(page);
       alert("Deleted.");
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || "Delete failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.message ||
+        "Delete failed";
+      alert(String(msg));
     }
   };
 
-const onSave = async () => {
-  if (!isValid) return;
+  const onSave = async () => {
+    if (!isValid) return;
 
-  const payload = {
-    name: form.name.trim(),
-    email: form.email.trim() || null,
-    phone: form.phone.trim() || null,
-    title: form.title.trim() || null,
-    notes: form.notes.trim() || null,
-    account_id:
-      form.account_id === "" || form.account_id === null ? null : Number(form.account_id),
-    owner_id:
-      form.owner_id === "" || form.owner_id === null ? null : Number(form.owner_id),
-  };
+    const payload = {
+      name: form.name.trim(),
+      email: form.email.trim() || null,
+      phone: form.phone.trim() || null,
+      title: form.title.trim() || null,
+      notes: form.notes.trim() || null,
+      account_id:
+        form.account_id === "" || form.account_id === null
+          ? null
+          : Number(form.account_id),
+      owner_id:
+        form.owner_id === "" || form.owner_id === null
+          ? null
+          : Number(form.owner_id),
+    };
 
-  const id = editing?.id;
-  const urlSlash = id ? `/contacts/${id}/` : "/contacts/";
-  const urlNoSlash = id ? `/contacts/${id}` : "/contacts";
-
-  try {
-    if (editing) {
-      // 1) PATCH /contacts/:id/
-      try {
-        await api.patch(urlSlash, payload);
-      } catch (e1) {
-        // 2) PUT /contacts/:id/
+    try {
+      if (editing) {
         try {
-          await api.put(urlSlash, payload);
-        } catch (e2) {
-          // 3) PUT /contacts/:id   (no trailing slash)
-          try {
-            await api.put(urlNoSlash, payload);
-          } catch (e3) {
-            // 4) POST override → bazı FastAPI/DRF kurulumları sadece POST kabul eder
-            try {
-              await api.post(urlSlash, payload, {
-                headers: { "X-HTTP-Method-Override": "PATCH" },
-              });
-            } catch (e4) {
-              // 5) POST override + no slash
-              await api.post(urlNoSlash, payload, {
-                headers: { "X-HTTP-Method-Override": "PATCH" },
-              });
-            }
-          }
+          await apiPatch(byIdUrl(editing.id), payload);
+        } catch {
+          await apiPatch(byIdUrlNoSlash(editing.id), payload);
+        }
+      } else {
+        try {
+          await apiPost("/contacts/", payload);
+        } catch {
+          await apiPost("/contacts", payload);
         }
       }
-    } else {
-      // create
-      try {
-        await api.post("/contacts/", payload);
-      } catch {
-        await api.post("/contacts", payload); // no trailing slash fallback
-      }
+
+      setOpen(false);
+      await fetchContacts(page);
+      alert("Saved.");
+    } catch (e: any) {
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.message ||
+        "Save failed";
+      alert(msg);
     }
+  };
 
-    setOpen(false);
-    await fetchContacts(page);
-    alert("Saved.");
-  } catch (e: any) {
-    // Sunucunun döndürdüğü mesaj + method/URL uyuşmazlığı için ipucu
-    const msg =
-      e?.response?.data?.detail ||
-      e?.message ||
-      "Save failed";
-    alert(msg);
-  }
-};
-
-  // Accounts'taki gibi basit pager metni
   const pagerText = useMemo(() => {
     const head = `Page ${page}`;
     return typeof total === "number" ? `${head} • Total: ${total}` : head;
@@ -247,10 +230,18 @@ const onSave = async () => {
           <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
             Search
           </button>
-          <button type="button" onClick={() => fetchContacts(page)} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
+          <button
+            type="button"
+            onClick={() => fetchContacts(page)}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
             Refresh
           </button>
-          <button type="button" onClick={onNew} className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500">
+          <button
+            type="button"
+            onClick={onNew}
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+          >
             + New
           </button>
         </form>
@@ -290,12 +281,8 @@ const onSave = async () => {
                     <td className="py-2 pr-4">{c.phone || "—"}</td>
                     <td className="py-2 pr-4">{c.title || "—"}</td>
                     <td className="py-2 pr-4">{c.notes || "—"}</td>
-                    <td className="py-2 pr-4">
-                      {c.account_name ?? c.account_id ?? "—"}
-                    </td>
-                    <td className="py-2 pr-4">
-                      {c.owner_name ?? c.owner_id ?? "—"}
-                    </td>
+                    <td className="py-2 pr-4">{c.account_name ?? c.account_id ?? "—"}</td>
+                    <td className="py-2 pr-4">{c.owner_name ?? c.owner_id ?? "—"}</td>
                     <td className="py-2 pr-4 text-right">
                       <button
                         onClick={() => onEdit(c)}
@@ -408,9 +395,7 @@ const onSave = async () => {
                 <Field label="Account ID">
                   <input
                     value={form.account_id}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, account_id: e.target.value }))
-                    }
+                    onChange={(e) => setForm((f) => ({ ...f, account_id: e.target.value }))}
                     className="w-full px-3 py-2 rounded-md border text-sm"
                     placeholder="12"
                   />

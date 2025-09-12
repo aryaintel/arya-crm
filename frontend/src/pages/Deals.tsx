@@ -1,6 +1,6 @@
 // src/pages/Deals.tsx
 import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type Deal = {
   id: number | string;
@@ -15,18 +15,15 @@ type Deal = {
   owner_name?: string | null;
   created_at?: string;
   updated_at?: string;
-  // backend bazı alanları nested döndürebilir (owner/account objeleri)
   owner?: { id?: number | string; name?: string; email?: string } | null;
   account?: { id?: number | string; name?: string; industry?: string } | null;
 };
 
 type DealsPayload = {
   items: Deal[];
-  // Backend çoğu zaman top-level meta döndürüyor:
   total?: number;
   page?: number;
   page_size?: number;
-  // Alternatif olarak meta objesi de olabilir:
   meta?: {
     total?: number;
     page?: number;
@@ -39,14 +36,10 @@ export default function DealsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Swagger’da gördüğümüz parametreler
   const [page, setPage] = useState(1);
   const [pageSize] = useState(20);
-
-  // meta
   const [total, setTotal] = useState<number | undefined>();
 
-  // modal/form
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Deal | null>(null);
   const [form, setForm] = useState({
@@ -57,7 +50,6 @@ export default function DealsPage() {
     expected_close_date: "",
     account_id: "" as string | number | "",
     owner_id: "" as string | number | "",
-    // sadece gösterim amaçlı
     account_name: "",
     owner_name: "",
   });
@@ -71,14 +63,15 @@ export default function DealsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<DealsPayload>("/deals/", {
-        params: { page: p, page_size: pageSize },
+      const qs = new URLSearchParams({
+        page: String(p),
+        page_size: String(pageSize),
       });
+      const data = await apiGet<DealsPayload>(`/deals/?${qs.toString()}`);
 
-      const data = res.data;
-      const list = Array.isArray((data as any).items)
-        ? (data as any).items
-        : (Array.isArray(data) ? (data as any) : []);
+      const list: Deal[] = Array.isArray((data as any).items)
+        ? ((data as any).items as Deal[])
+        : (Array.isArray(data as any) ? ((data as any) as Deal[]) : []);
       setItems(list);
 
       const meta = data.meta ?? data;
@@ -87,9 +80,12 @@ export default function DealsPage() {
 
       if (typeof meta?.page === "number") setPage(meta.page);
       else setPage(p);
-      // page_size backenden farklı dönerse isterseniz burada okuyup kullanabilirsiniz
     } catch (e: any) {
-      setError(e?.response?.data?.detail || e?.message || "Deals fetch failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.message ||
+        "Deals fetch failed";
+      setError(String(msg));
     } finally {
       setLoading(false);
     }
@@ -105,9 +101,9 @@ export default function DealsPage() {
     return typeof total === "number" ? `${head} • Total: ${total}` : head;
   }, [page, total]);
 
-  // hasPrev/hasNext’ı total ve page üzerinden tahmin et
   const hasPrev = page > 1;
-  const hasNext = typeof total === "number" ? page * pageSize < total : items.length === pageSize;
+  const hasNext =
+    typeof total === "number" ? page * pageSize < total : items.length === pageSize;
 
   const onRefresh = () => fetchDeals(page);
 
@@ -147,14 +143,18 @@ export default function DealsPage() {
     if (!confirm(`Delete deal "${row.name ?? row.id}"?`)) return;
     try {
       try {
-        await api.delete(byIdUrl(row.id));
+        await apiDelete(byIdUrl(row.id));
       } catch {
-        await api.delete(byIdUrlNoSlash(row.id));
+        await apiDelete(byIdUrlNoSlash(row.id));
       }
       await fetchDeals(page);
       alert("Deleted.");
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || "Delete failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.message ||
+        "Delete failed";
+      alert(String(msg));
     }
   };
 
@@ -177,46 +177,29 @@ export default function DealsPage() {
           : Number(form.owner_id),
     };
 
-    const id = editing?.id;
-    const urlSlash = id ? `/deals/${id}/` : "/deals/";
-    const urlNoSlash = id ? `/deals/${id}` : "/deals";
-
     try {
       if (editing) {
-        // Accounts/Contacts’ta yaptığımız sağlam fallback zinciri
         try {
-          await api.patch(urlSlash, payload);
+          await apiPatch(byIdUrl(editing.id), payload);
         } catch {
-          try {
-            await api.put(urlSlash, payload);
-          } catch {
-            try {
-              await api.put(urlNoSlash, payload);
-            } catch {
-              try {
-                await api.post(urlSlash, payload, {
-                  headers: { "X-HTTP-Method-Override": "PATCH" },
-                });
-              } catch {
-                await api.post(urlNoSlash, payload, {
-                  headers: { "X-HTTP-Method-Override": "PATCH" },
-                });
-              }
-            }
-          }
+          await apiPatch(byIdUrlNoSlash(editing.id), payload);
         }
       } else {
         try {
-          await api.post("/deals/", payload);
+          await apiPost("/deals/", payload);
         } catch {
-          await api.post("/deals", payload);
+          await apiPost("/deals", payload);
         }
       }
       setOpen(false);
       await fetchDeals(page);
       alert("Saved.");
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || "Save failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.message ||
+        "Save failed";
+      alert(String(msg));
     }
   };
 
@@ -402,9 +385,7 @@ export default function DealsPage() {
                 <Field label="Account ID">
                   <input
                     value={form.account_id}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, account_id: e.target.value }))
-                    }
+                    onChange={(e) => setForm((f) => ({ ...f, account_id: e.target.value }))}
                     className="w-full px-3 py-2 rounded-md border text-sm"
                     placeholder="2"
                   />
