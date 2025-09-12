@@ -1,4 +1,3 @@
-// src/App.tsx
 import {
   NavLink,
   Routes,
@@ -15,20 +14,20 @@ import ContactsPage from "./pages/Contacts";
 import DealsPage from "./pages/Deals";
 import LoginPage from "./pages/Login";
 
-import { apiGet } from "./lib/api";
+import { apiGet, ApiError } from "./lib/api";
 import { clearToken, getToken } from "./lib/auth";
 
 const UsersPage = lazy(() => import("./pages/Users"));
 
-type Me = { id: number; email: string; role: string };
+type Me = { id: number; email: string; role: "admin" | "member" };
 
 function usePageTitle() {
   const { pathname } = useLocation();
   if (pathname.startsWith("/accounts")) return "Accounts";
   if (pathname.startsWith("/contacts")) return "Contacts";
-  if (pathname.startsWith("/deals"))    return "Opportunities";
-  if (pathname.startsWith("/users"))    return "Users";
-  if (pathname.startsWith("/login"))    return "Login";
+  if (pathname.startsWith("/deals")) return "Opportunities";
+  if (pathname.startsWith("/users")) return "Users";
+  if (pathname.startsWith("/login")) return "Login";
   return "Dashboard";
 }
 
@@ -37,35 +36,74 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children;
 }
 
+function RequireAdmin({
+  children,
+  me,
+}: {
+  children: JSX.Element;
+  me: Me | null;
+}) {
+  if (!getToken()) return <Navigate to="/login" replace />;
+  if (me?.role !== "admin") return <Navigate to="/" replace />;
+  return children;
+}
+
 export default function App() {
   const title = usePageTitle();
   const nav = useNavigate();
+  const location = useLocation();
   const [me, setMe] = useState<Me | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      // token yoksa kullanıcıyı çıkar
-      if (!getToken()) {
-        setMe(null);
-        return;
+  // /auth/me -> 404 olursa /me fallback
+  async function fetchMeWithFallback(): Promise<Me> {
+    try {
+      return await apiGet<Me>("/auth/me");
+    } catch (e: any) {
+      // Sadece 404'te /me'ye düş
+      if (e instanceof ApiError && e.status === 404) {
+        return await apiGet<Me>("/me");
       }
-      try {
-        // BE’ye göre "/me" veya "/auth/me" olabilir; login’de "/auth/me" kullandıysan onu yaz
-        const data = await apiGet<Me>("/auth/me");
-        if (alive) setMe(data);
-      } catch {
-        // token bozuk/expired ise temizle
+      throw e;
+    }
+  }
+
+  // me'yi yükle (token varsa)
+  async function loadMe() {
+    if (!getToken()) {
+      setMe(null);
+      return;
+    }
+    try {
+      const m = await fetchMeWithFallback();
+      setMe(m);
+    } catch (e: any) {
+      // Token'ı sadece gerçek yetkisizlikte sil
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
         clearToken();
         setMe(null);
+        // Kullanıcı korumalı bir sayfadaysa login’e yönlenir (RequireAuth)
+      } else {
+        // Ağ hatası / 5xx / 404 vb. durumlarda token'ı KORU
+        // Me bilgisi yoksa header'da "guest" görünür ama redirect olmaz
+        console.warn("loadMe failed (token preserved):", e);
       }
-    })();
+    }
+  }
 
-    return () => {
-      alive = false;
+  useEffect(() => {
+    loadMe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname]);
+
+  // Başka tab’da login/logout olursa eşitle
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "aryaintel_token") loadMe();
     };
-  }, []); // ilk yüklemede kontrol yeterli; daha ileri senaryoda token değişimini de izleyebilirsin
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const onLogout = () => {
     clearToken();
@@ -145,7 +183,7 @@ export default function App() {
         <header className="h-16 bg-white border-b shadow-sm flex items-center justify-between px-6">
           <h1 className="text-xl font-semibold">{title}</h1>
           <div className="flex items-center gap-3 text-sm text-gray-600">
-            <span>{me?.email ?? "guest"}</span>
+            <span>{me ? `${me.email} · ${me.role}` : "guest"}</span>
             {getToken() ? (
               <button
                 onClick={onLogout}
@@ -203,15 +241,15 @@ export default function App() {
               }
             />
 
-            {/* Admin sayfası – lazy; import sorunu App'i çökertmesin */}
+            {/* Admin sayfası – lazy; admin olmayanı engelle */}
             <Route
               path="/users"
               element={
-                <RequireAuth>
+                <RequireAdmin me={me}>
                   <Suspense fallback={<div>Loading…</div>}>
                     <UsersPage />
                   </Suspense>
-                </RequireAuth>
+                </RequireAdmin>
               }
             />
           </Routes>

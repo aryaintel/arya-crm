@@ -53,7 +53,7 @@ export default function UsersPage() {
 
   const isValid = useMemo(() => {
     const okEmail = /\S+@\S+\.\S+/.test(form.email);
-    if (editing) return okEmail;                   // edit: şifre opsiyonel
+    if (editing) return okEmail; // edit: şifre opsiyonel
     return okEmail && form.password.trim().length >= 6; // create: min 6
   }, [form, editing]);
 
@@ -136,7 +136,7 @@ export default function UsersPage() {
     if (!confirm(`Delete user "${row.email}"?`)) return;
     try {
       try {
-        await apiDelete(byIdUrl(row.id));       // /users/:id/
+        await apiDelete(byIdUrl(row.id)); // /users/:id/
       } catch {
         await apiDelete(byIdUrlNoSlash(row.id)); // /users/:id
       }
@@ -155,11 +155,12 @@ export default function UsersPage() {
   const onSave = async () => {
     if (!isValid) return;
 
-    // Tek BİR payload: (önceden iki kere tanımlama hatası vardı)
+    // Backend uyumluluğu için hem is_active hem active gönderiyoruz
     const basePayload: any = {
       email: form.email.trim().toLowerCase(),
       role_name: form.role_name.trim() || "member",
-      is_active: form.is_active,
+      is_active: form.is_active === true,
+      active: form.is_active === true,
     };
     if (!editing) {
       basePayload.password = form.password; // create: zorunlu

@@ -15,7 +15,7 @@ from ..core.security import hash_password
 
 router = APIRouter(prefix="/users", tags=["users"])
 
-DEFAULT_ROLE = "member"  # ← None gelirse kullanılacak güvenli değer
+DEFAULT_ROLE = "member"  # role_name None gelirse kullanılacak güvenli değer
 
 
 # ---------------------------
@@ -45,7 +45,7 @@ class UserOut(BaseModel):
     created_at: Optional[datetime] = None
 
     class Config:
-        from_attributes = True  # Pydantic v2
+        from_attributes = True  # Pydantic v2 (orm_mode yerine)
 
 
 def serialize_user(u: User) -> Dict[str, Any]:
@@ -106,7 +106,7 @@ def list_users(
         .limit(size)
         .all()
     )
-    pages = (total + size - 1) // size if size else 1
+    pages = max(1, (total + size - 1) // size)
 
     return UsersListOut(
         meta=PageMeta(total=total, page=page, size=size, pages=pages),
@@ -114,20 +114,19 @@ def list_users(
     )
 
 
-# ... üst kısım aynı ...
-
 @router.post(
     "/",
     response_model=UserOut,
     status_code=status.HTTP_201_CREATED,
     summary="Create User",
-    dependencies=[Depends(require_permissions(["users:create"]))],
+    dependencies=[Depends(require_permissions(["users:write"]))],
 )
 def create_user(
     body: UserCreate,
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ):
+    # benzersizlik
     exists = (
         db.query(User)
         .filter(User.tenant_id == current.tenant_id, User.email == body.email.lower())
@@ -145,9 +144,9 @@ def create_user(
         role_name=role_name,
     )
 
-    # 🔧 SADECE modelde böyle bir kolon varsa is_active'i set et
-    if body.is_active is not None and hasattr(User, "is_active"):
-        user_kwargs["is_active"] = bool(body.is_active)
+    # sadece modelde böyle bir kolon varsa set et
+    if hasattr(User, "is_active"):
+        user_kwargs["is_active"] = bool(body.is_active) if body.is_active is not None else True
 
     user = User(**user_kwargs)
 
@@ -205,7 +204,7 @@ def update_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    # Email değişirse benzersizlik kontrolü
+    # email değişecekse benzersizlik
     if body.email and body.email.lower() != getattr(user, "email", None):
         exists = (
             db.query(User)
@@ -218,7 +217,6 @@ def update_user(
     if body.email is not None:
         user.email = body.email.lower()
     if body.role_name is not None:
-        # None gelirse default kullan
         user.role_name = body.role_name or DEFAULT_ROLE
     if body.is_active is not None and hasattr(user, "is_active"):
         user.is_active = bool(body.is_active)
@@ -259,4 +257,4 @@ def delete_user(
 
     db.delete(user)
     db.commit()
-    # 204 No Content
+    return None  # 204

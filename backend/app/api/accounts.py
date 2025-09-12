@@ -85,7 +85,7 @@ def _apply_search(qs, q: Optional[str]):
 def _apply_sort(qs, sort: Optional[str]):
     """
     sort param formatı:
-      - "created_at" (varsayılan: asc)
+      - "created_at" (varsayılan: desc)
       - "created_at:desc"
       - "name:asc" / "name:desc"
       - "id", "id:desc"
@@ -113,7 +113,7 @@ def _apply_sort(qs, sort: Optional[str]):
 @router.get(
     "/",
     summary="List Accounts (paged, optional search & sort)",
-    dependencies=[Depends(require_permissions(["accounts:read"]))],
+    # NOTE: Üye (member) okuma yapabilsin diye sadece kimlik doğrulama yeterli
 )
 def list_accounts(
     page: int = Query(1, ge=1, description="1-based page index"),
@@ -180,7 +180,7 @@ def create_account(
     "/{account_id}",
     response_model=AccountOut,
     summary="Get Account",
-    dependencies=[Depends(require_permissions(["accounts:read"]))],
+    # NOTE: okuma için yalnız doğrulama yeterli
 )
 def get_account(
     account_id: int,
