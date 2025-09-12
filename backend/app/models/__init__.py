@@ -35,15 +35,17 @@ class User(Base):
     email = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
 
-    # Varsayılanı "member" yapalım
-    role_name = Column(String, nullable=False, default="member")
+    # Basit rol modeli: kullanıcı üzerinde rol adı tutuluyor (admin, sales, vs.)
+    role_name = Column(String, nullable=False, default="user")
 
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
+        # Aynı tenant içinde e-posta tekil olsun
         UniqueConstraint("tenant_id", "email", name="uix_user_tenant_email"),
     )
-    
+
+
 class Role(Base):
     """
     İsteğe bağlı rol tablosu (permissions string'i virgül ile ayrılmış listedir)
