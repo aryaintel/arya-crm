@@ -1,6 +1,6 @@
 // src/pages/Users.tsx
 import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type User = {
   id: number | string;
@@ -17,7 +17,7 @@ type UsersPayload = {
     size?: number;
     total?: number;
     pages?: number;
-    has_next?: boolean; // BE set etmese de koruyoruz
+    has_next?: boolean;
     has_prev?: boolean;
   };
 };
@@ -43,7 +43,7 @@ export default function UsersPage() {
     email: string;
     role_name: string;
     is_active: boolean;
-    password: string; // create'de zorunlu, edit'te boş kalırsa gönderilmez
+    password: string; // create'de zorunlu, edit'te opsiyonel
   }>({
     email: "",
     role_name: "",
@@ -53,10 +53,11 @@ export default function UsersPage() {
 
   const isValid = useMemo(() => {
     const okEmail = /\S+@\S+\.\S+/.test(form.email);
-    if (editing) return okEmail;            // edit: password opsiyonel
-    return okEmail && form.password.trim().length >= 6; // create: şifre min 6
+    if (editing) return okEmail;                   // edit: şifre opsiyonel
+    return okEmail && form.password.trim().length >= 6; // create: min 6
   }, [form, editing]);
 
+  // Yardımcı URL’ler (hem /users/:id hem /users/:id/ denenir)
   const byIdUrl = (id: number | string) => `/users/${id}/`;
   const byIdUrlNoSlash = (id: number | string) => `/users/${id}`;
 
@@ -64,33 +65,40 @@ export default function UsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get("/users/", {
-        params: { page, size: pageSize, search: q || undefined },
-      });
-      const payload: UsersPayload = Array.isArray(res.data)
-        ? { items: res.data, meta: { page, size: pageSize } }
-        : (res.data as UsersPayload);
+      const params = new URLSearchParams();
+      params.set("page", String(page));
+      params.set("size", String(pageSize));
+      if (q.trim()) params.set("search", q.trim());
+
+      const payload = await apiGet<UsersPayload>(`/users/?${params.toString()}`);
 
       setItems(payload.items ?? []);
       setTotal(payload.meta?.total);
       setPages(payload.meta?.pages);
-      // BE'den has_next gelmiyorsa kendimiz çıkaralım
+
+      // has_next / has_prev çıkarımı
       if (typeof payload.meta?.has_next === "boolean") {
-        setHasNext(payload.meta?.has_next);
+        setHasNext(payload.meta.has_next);
       } else if (payload.meta?.pages) {
-        setHasNext(page < (payload.meta?.pages ?? 1));
+        setHasNext(page < (payload.meta.pages ?? 1));
       } else if (payload.meta?.total != null) {
-        setHasNext(page * pageSize < (payload.meta?.total ?? 0));
+        setHasNext(page * pageSize < (payload.meta.total ?? 0));
       } else {
         setHasNext(undefined);
       }
+
       if (typeof payload.meta?.has_prev === "boolean") {
-        setHasPrev(payload.meta?.has_prev);
+        setHasPrev(payload.meta.has_prev);
       } else {
         setHasPrev(page > 1);
       }
     } catch (e: any) {
-      setError(e?.response?.data?.detail || e?.message || "Unknown error");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Unknown error";
+      setError(String(msg));
     } finally {
       setLoading(false);
     }
@@ -128,46 +136,56 @@ export default function UsersPage() {
     if (!confirm(`Delete user "${row.email}"?`)) return;
     try {
       try {
-        await api.delete(byIdUrl(row.id));
+        await apiDelete(byIdUrl(row.id));       // /users/:id/
       } catch {
-        await api.delete(byIdUrlNoSlash(row.id));
+        await apiDelete(byIdUrlNoSlash(row.id)); // /users/:id
       }
       await fetchUsers();
       alert("Deleted.");
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || "Delete failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Delete failed";
+      alert(String(msg));
     }
   };
 
   const onSave = async () => {
     if (!isValid) return;
 
-    // BE: role_name boşsa member ile defaultluyor; ama açıkça gönderelim
+    // Tek BİR payload: (önceden iki kere tanımlama hatası vardı)
     const basePayload: any = {
       email: form.email.trim().toLowerCase(),
       role_name: form.role_name.trim() || "member",
       is_active: form.is_active,
     };
     if (!editing) {
-      basePayload.password = form.password; // create'de zorunlu
+      basePayload.password = form.password; // create: zorunlu
     } else if (form.password.trim().length >= 6) {
-      basePayload.password = form.password.trim(); // edit'te opsiyonel
+      basePayload.password = form.password.trim(); // edit: opsiyonel
     }
 
     try {
       if (editing) {
         try {
-          await api.patch(byIdUrl(editing.id), basePayload);
+          await apiPatch(byIdUrl(editing.id), basePayload);
         } catch {
-          await api.patch(byIdUrlNoSlash(editing.id), basePayload);
+          await apiPatch(byIdUrlNoSlash(editing.id), basePayload);
         }
       } else {
-        await api.post("/users/", basePayload);
+        await apiPost("/users/", basePayload);
       }
       setOpen(false);
       await fetchUsers();
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || "Save failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Save failed";
+      alert(String(msg));
     }
   };
 
@@ -183,8 +201,16 @@ export default function UsersPage() {
             placeholder="Search in email/role…"
             className="px-3 py-1.5 rounded-md border text-sm w-64"
           />
-          <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">Search</button>
-          <button type="button" onClick={fetchUsers} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">Refresh</button>
+          <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
+            Search
+          </button>
+          <button
+            type="button"
+            onClick={fetchUsers}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
+            Refresh
+          </button>
           <button
             type="button"
             onClick={onNew}
@@ -199,7 +225,9 @@ export default function UsersPage() {
       {loading && <div className="text-sm text-gray-500">Loading users…</div>}
       {error && <div className="text-sm text-red-600">Error: {error}</div>}
       {!loading && !error && items.length === 0 && (
-        <div className="text-sm text-gray-500">No users found. Add one and click <b>Refresh</b>.</div>
+        <div className="text-sm text-gray-500">
+          No users found. Add one and click <b>Refresh</b>.
+        </div>
       )}
 
       {/* list */}
@@ -222,10 +250,22 @@ export default function UsersPage() {
                     <td className="py-2 pr-4 font-medium">{u.email}</td>
                     <td className="py-2 pr-4">{u.role_name || "—"}</td>
                     <td className="py-2 pr-4">{u.is_active === false ? "No" : "Yes"}</td>
-                    <td className="py-2 pr-4">{u.created_at ? new Date(u.created_at).toLocaleString() : "—"}</td>
+                    <td className="py-2 pr-4">
+                      {u.created_at ? new Date(u.created_at).toLocaleString() : "—"}
+                    </td>
                     <td className="py-2 pr-4 text-right">
-                      <button onClick={() => onEdit(u)} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">Edit</button>
-                      <button onClick={() => onDelete(u)} className="px-2 py-1 rounded border hover:bg-gray-50">Delete</button>
+                      <button
+                        onClick={() => onEdit(u)}
+                        className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => onDelete(u)}
+                        className="px-2 py-1 rounded border hover:bg-gray-50"
+                      >
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -306,13 +346,17 @@ export default function UsersPage() {
                     checked={form.is_active}
                     onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
                   />
-                  <label htmlFor="is_active" className="text-sm text-gray-700">User is active</label>
+                  <label htmlFor="is_active" className="text-sm text-gray-700">
+                    User is active
+                  </label>
                 </div>
               </Field>
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setOpen(false)} className="px-3 py-1.5 rounded-md border hover:bg-gray-50">Cancel</button>
+              <button onClick={() => setOpen(false)} className="px-3 py-1.5 rounded-md border hover:bg-gray-50">
+                Cancel
+              </button>
               <button
                 disabled={!isValid}
                 onClick={onSave}

@@ -1,6 +1,6 @@
 // src/pages/Accounts.tsx
 import { useEffect, useMemo, useState } from "react";
-import api from "../lib/api";
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type Account = {
   id: number | string;
@@ -53,17 +53,25 @@ export default function AccountsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get("/accounts/", { params: { page, page_size: pageSize, q } });
-      const payload: AccountsPayload = Array.isArray(res.data)
-        ? { items: res.data, meta: { page, page_size: pageSize } }
-        : (res.data as AccountsPayload);
+      const qs = new URLSearchParams({
+        page: String(page),
+        page_size: String(pageSize),
+      });
+      if (q.trim()) qs.set("q", q.trim());
+
+      const payload = await apiGet<AccountsPayload>(`/accounts/?${qs.toString()}`);
 
       setItems(payload.items ?? []);
       setTotal(payload.meta?.total);
       setHasNext(payload.meta?.has_next);
       setHasPrev(payload.meta?.has_prev);
     } catch (e: any) {
-      setError(e?.response?.data?.detail || e?.message || "Unknown error");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Unknown error";
+      setError(String(msg));
     } finally {
       setLoading(false);
     }
@@ -102,14 +110,19 @@ export default function AccountsPage() {
     if (!confirm(`Delete account "${row.name}"?`)) return;
     try {
       try {
-        await api.delete(byIdUrl(row.id));           // /accounts/:id/
+        await apiDelete(byIdUrl(row.id));           // /accounts/:id/
       } catch {
-        await api.delete(byIdUrlNoSlash(row.id));    // /accounts/:id
+        await apiDelete(byIdUrlNoSlash(row.id));    // /accounts/:id
       }
       await fetchAccounts();
       alert("Deleted.");
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || "Delete failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Delete failed";
+      alert(String(msg));
     }
   };
 
@@ -130,21 +143,22 @@ export default function AccountsPage() {
     try {
       if (editing) {
         try {
-          await api.patch(byIdUrl(editing.id), payload);
+          await apiPatch(byIdUrl(editing.id), payload);
         } catch {
-          try {
-            await api.put(byIdUrl(editing.id), payload);
-          } catch {
-            await api.put(byIdUrlNoSlash(editing.id), payload);
-          }
+          await apiPatch(byIdUrlNoSlash(editing.id), payload);
         }
       } else {
-        await api.post("/accounts/", payload);
+        await apiPost("/accounts/", payload);
       }
       setOpen(false);
       await fetchAccounts();
     } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || "Save failed");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Save failed";
+      alert(String(msg));
     }
   };
 
