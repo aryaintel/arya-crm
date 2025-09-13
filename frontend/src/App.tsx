@@ -11,9 +11,10 @@ import { Suspense, lazy, useEffect, useState, useCallback } from "react";
 
 import DashboardPage from "./pages/Dashboard";
 import AccountsPage from "./pages/Accounts";
-import AccountDetailPage from "./pages/AccountDetail"; // ← yeni detay sayfası
+import AccountDetailPage from "./pages/AccountDetail";
 import ContactsPage from "./pages/Contacts";
 import DealsPage from "./pages/Deals";
+import OpportunityDetailPage from "./pages/OpportunityDetail"; // ← NEW
 import LoginPage from "./pages/Login";
 
 import { apiGet, ApiError } from "./lib/api";
@@ -83,9 +84,7 @@ export default function App() {
     }
   }, [fetchMe]);
 
-  useEffect(() => {
-    loadMe();
-  }, [loadMe]);
+  useEffect(() => { loadMe(); }, [loadMe]);
 
   useEffect(() => {
     const handler = () => loadMe();
@@ -108,69 +107,14 @@ export default function App() {
           Aryaintel CRM
         </div>
         <nav className="flex-1 p-4 space-y-2">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Dashboard
-          </NavLink>
-          <NavLink
-            to="/accounts"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Accounts
-          </NavLink>
-          <NavLink
-            to="/contacts"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Contacts
-          </NavLink>
-          <NavLink
-            to="/deals"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
-            }
-          >
-            Opportunities
-          </NavLink>
+          <NavLink to="/" end className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Dashboard</NavLink>
+          <NavLink to="/accounts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Accounts</NavLink>
+          <NavLink to="/contacts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Contacts</NavLink>
+          <NavLink to="/deals" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Opportunities</NavLink>
           {isAdmin && (
             <>
-              <NavLink
-                to="/users"
-                className={({ isActive }) =>
-                  `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                    isActive ? "bg-indigo-100 text-indigo-700" : ""
-                  }`
-                }
-              >
-                Users
-              </NavLink>
-              <NavLink
-                to="/roles"
-                className={({ isActive }) =>
-                  `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                    isActive ? "bg-indigo-100 text-indigo-700" : ""
-                  }`
-                }
-              >
-                Roles
-              </NavLink>
+              <NavLink to="/users" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Users</NavLink>
+              <NavLink to="/roles" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Roles</NavLink>
             </>
           )}
         </nav>
@@ -182,19 +126,9 @@ export default function App() {
           <div className="flex items-center gap-3 text-sm text-gray-600">
             <span>{me ? `${me.email} (${me.role})` : "guest"}</span>
             {getToken() ? (
-              <button
-                onClick={onLogout}
-                className="px-2 py-1 rounded border hover:bg-gray-50"
-              >
-                Logout
-              </button>
+              <button onClick={onLogout} className="px-2 py-1 rounded border hover:bg-gray-50">Logout</button>
             ) : (
-              <NavLink
-                to="/login"
-                className="px-2 py-1 rounded border hover:bg-gray-50"
-              >
-                Login
-              </NavLink>
+              <NavLink to="/login" className="px-2 py-1 rounded border hover:bg-gray-50">Login</NavLink>
             )}
           </div>
         </header>
@@ -202,46 +136,12 @@ export default function App() {
         <main className="flex-1 p-6">
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route
-              path="/"
-              element={
-                <RequireAuth>
-                  <DashboardPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/accounts"
-              element={
-                <RequireAuth>
-                  <AccountsPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/accounts/:id"
-              element={
-                <RequireAuth>
-                  <AccountDetailPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/contacts"
-              element={
-                <RequireAuth>
-                  <ContactsPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/deals"
-              element={
-                <RequireAuth>
-                  <DealsPage />
-                </RequireAuth>
-              }
-            />
+            <Route path="/" element={<RequireAuth><DashboardPage /></RequireAuth>} />
+            <Route path="/accounts" element={<RequireAuth><AccountsPage /></RequireAuth>} />
+            <Route path="/accounts/:id" element={<RequireAuth><AccountDetailPage /></RequireAuth>} />
+            <Route path="/contacts" element={<RequireAuth><ContactsPage /></RequireAuth>} />
+            <Route path="/deals" element={<RequireAuth><DealsPage /></RequireAuth>} />
+            <Route path="/deals/:id" element={<RequireAuth><OpportunityDetailPage /></RequireAuth>} /> {/* NEW */}
             <Route
               path="/users"
               element={

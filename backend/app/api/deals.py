@@ -1,7 +1,7 @@
 # backend/app/api/deals.py
 
-from typing import Optional, List, Dict, Any
-from datetime import date
+from typing import Optional, List
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -56,11 +56,15 @@ class DealOut(BaseModel):
     expected_close_date: Optional[date] = None
     source: Optional[str] = None
 
+    # yeni alanlar
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 
 
-# --- Stages lookup için çıkış şeması (yeni) ---
+# --- Stages lookup için çıkış şeması ---
 class StageOut(BaseModel):
     id: int
     no: int
@@ -170,6 +174,9 @@ def _serialize(opp: Opportunity) -> DealOut:
         "stage_id": opp.stage_id,
         "expected_close_date": opp.expected_close_date,
         "source": opp.source,
+        # yeni eklenen alanlar
+        "created_at": opp.created_at,
+        "updated_at": opp.updated_at,
     })
 
 
@@ -215,7 +222,6 @@ def list_deals(
     return {"total": total, "page": page, "page_size": page_size, "items": items}
 
 
-# ---- STAGES LOOKUP (yeni) ----
 @router.get(
     "/stages",
     summary="List available stages for default Sales pipeline",
@@ -234,7 +240,6 @@ def list_stages(
         .all()
     )
     return [StageOut(id=s.id, no=s.order_index, name=s.name) for s in rows]
-# ------------------------------
 
 
 @router.post(
@@ -248,9 +253,7 @@ def create_deal(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ):
-    # Hesap tenant'a mı ait?
     _ensure_account_in_tenant(db, current.tenant_id, body.account_id)
-
     st_id = resolve_stage_id(db, current.tenant_id, body.stage_id)
 
     opp = Opportunity(
@@ -316,7 +319,7 @@ def update_deal(
     if "stage_id" in data:
         data["stage_id"] = resolve_stage_id(db, current.tenant_id, data["stage_id"])
 
-    # account_id/owner_id client'tan değiştirilemez (tasarım gereği) – yoksa ignore
+    # account_id/owner_id client'tan değiştirilemez – varsa ignore et
     for blocked in ("account_id", "owner_id"):
         if blocked in data:
             data.pop(blocked, None)

@@ -1,5 +1,6 @@
 // src/pages/Deals.tsx — UI: Opportunities
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type Deal = {
@@ -26,12 +27,7 @@ type DealsPayload = {
 type AccountRow = { id: number; name: string; industry?: string | null };
 type AccountsList = { items: AccountRow[] };
 
-// Backend /deals/stages çıkışı: { id, no, name }
-type StageRow = {
-  id: number;
-  no: number;   // 0..3
-  name: string; // "Idea" / "Business Case" / ...
-};
+type StageRow = { id: number; no: number; name: string };
 
 export default function DealsPage() {
   const [items, setItems] = useState<Deal[]>([]);
@@ -42,19 +38,16 @@ export default function DealsPage() {
   const [pageSize] = useState(20);
   const [total, setTotal] = useState<number | undefined>();
 
-  // stages
   const [stages, setStages] = useState<StageRow[]>([]);
   const stageMap = useMemo(
     () => Object.fromEntries(stages.map((s) => [s.id, s] as const)),
     [stages]
   );
 
-  // account lookup
   const [accQuery, setAccQuery] = useState("");
   const [accOptions, setAccOptions] = useState<AccountRow[]>([]);
   const [accLoading, setAccLoading] = useState(false);
 
-  // modal
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Deal | null>(null);
   const [form, setForm] = useState<{
@@ -88,7 +81,6 @@ export default function DealsPage() {
   const byIdUrl = (id: number | string) => `/deals/${id}/`;
   const byIdUrlNoSlash = (id: number | string) => `/deals/${id}`;
 
-  // ------- fetch deals -------
   const fetchDeals = async (p = page) => {
     setLoading(true);
     setError(null);
@@ -102,14 +94,14 @@ export default function DealsPage() {
       setTotal(typeof data.total === "number" ? data.total : list.length);
       setPage(typeof data.page === "number" ? data.page : p);
     } catch (e: any) {
-      const msg = (e instanceof ApiError && e.message) || e?.message || "Opportunities fetch failed";
+      const msg =
+        (e instanceof ApiError && e.message) || e?.message || "Opportunities fetch failed";
       setError(String(msg));
     } finally {
       setLoading(false);
     }
   };
 
-  // ------- fetch stages (lookup) -------
   const fetchStages = async () => {
     try {
       const list = await apiGet<StageRow[]>("/deals/stages");
@@ -121,7 +113,7 @@ export default function DealsPage() {
 
   useEffect(() => {
     fetchDeals(1);
-    fetchStages(); // list görünürken stage isimleri için hazır dursun
+    fetchStages();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -131,15 +123,17 @@ export default function DealsPage() {
   }, [page, total]);
 
   const hasPrev = page > 1;
-  const hasNext = typeof total === "number" ? page * pageSize < total : items.length === pageSize;
+  const hasNext =
+    typeof total === "number" ? page * pageSize < total : items.length === pageSize;
 
-  // ------- account lookup -------
   const fetchAccounts = async (q: string) => {
     setAccLoading(true);
     try {
       const qs = new URLSearchParams({ q, size: "10", page: "1" });
       const data = await apiGet<AccountsList>(`/accounts/?${qs.toString()}`);
-      const list = Array.isArray((data as any).items) ? ((data as any).items as AccountRow[]) : [];
+      const list = Array.isArray((data as any).items)
+        ? ((data as any).items as AccountRow[])
+        : [];
       setAccOptions(list);
     } catch {
       setAccOptions([]);
@@ -156,7 +150,6 @@ export default function DealsPage() {
     return () => clearTimeout(t);
   }, [accQuery]);
 
-  // ------- actions -------
   const onRefresh = () => fetchDeals(page);
 
   const onNew = () => {
@@ -172,7 +165,8 @@ export default function DealsPage() {
       stage_id: "",
       owner_email_hint: null,
     });
-    setAccQuery(""); setAccOptions([]);
+    setAccQuery("");
+    setAccOptions([]);
     setOpen(true);
   };
 
@@ -189,14 +183,19 @@ export default function DealsPage() {
       stage_id: d.stage_id ?? "",
       owner_email_hint: d.owner_email ?? null,
     });
-    setAccQuery(""); setAccOptions([]);
+    setAccQuery("");
+    setAccOptions([]);
     setOpen(true);
   };
 
   const onDelete = async (row: Deal) => {
     if (!confirm(`Delete opportunity "${row.name ?? row.id}"?`)) return;
     try {
-      try { await apiDelete(byIdUrl(row.id)); } catch { await apiDelete(byIdUrlNoSlash(row.id)); }
+      try {
+        await apiDelete(byIdUrl(row.id));
+      } catch {
+        await apiDelete(byIdUrlNoSlash(row.id));
+      }
       await fetchDeals(page);
       alert("Deleted.");
     } catch (e: any) {
@@ -215,7 +214,7 @@ export default function DealsPage() {
       expected_close_date: form.expected_close_date || null,
       source: form.source.trim() || null,
       account_id: Number(form.account_id),
-      stage_id: form.stage_id === "" ? undefined : Number(form.stage_id), // seçilmezse BE default atar
+      stage_id: form.stage_id === "" ? undefined : Number(form.stage_id),
     };
 
     const updatePayload = {
@@ -225,13 +224,15 @@ export default function DealsPage() {
       expected_close_date: form.expected_close_date || null,
       source: form.source.trim() || null,
       stage_id: form.stage_id === "" ? undefined : Number(form.stage_id),
-      // account_id / owner_id UPDATE'te gönderilmiyor
     };
 
     try {
       if (editing) {
-        try { await apiPatch(byIdUrl(editing.id), updatePayload); }
-        catch { await apiPatch(byIdUrlNoSlash(editing.id), updatePayload); }
+        try {
+          await apiPatch(byIdUrl(editing.id), updatePayload);
+        } catch {
+          await apiPatch(byIdUrlNoSlash(editing.id), updatePayload);
+        }
       } else {
         await apiPost("/deals/", createPayload);
       }
@@ -246,14 +247,22 @@ export default function DealsPage() {
 
   return (
     <div className="bg-white rounded-xl shadow p-6">
-      {/* header — “Deals” yerine “Opportunities” */}
+      {/* header — Accounts ile aynı düzen */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
         <h2 className="text-lg font-medium">Opportunities</h2>
         <div className="flex gap-2">
-          <button type="button" onClick={onRefresh} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
             Refresh
           </button>
-          <button type="button" onClick={onNew} className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500">
+          <button
+            type="button"
+            onClick={onNew}
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+          >
             + New
           </button>
         </div>
@@ -263,10 +272,12 @@ export default function DealsPage() {
       {loading && <div className="text-sm text-gray-500">Loading opportunities…</div>}
       {error && <div className="text-sm text-red-600">Error: {error}</div>}
       {!loading && !error && items.length === 0 && (
-        <div className="text-sm text-gray-500">No opportunities yet. Add one and click <b>Refresh</b>.</div>
+        <div className="text-sm text-gray-500">
+          No opportunities yet. Add one and click <b>Refresh</b>.
+        </div>
       )}
 
-      {/* list */}
+      {/* list — Accounts tablosuyla birebir */}
       {!loading && !error && items.length > 0 && (
         <>
           <div className="overflow-x-auto">
@@ -281,13 +292,21 @@ export default function DealsPage() {
                   <th className="py-2 pr-4">Currency</th>
                   <th className="py-2 pr-4">Expected Close</th>
                   <th className="py-2 pr-4">Source</th>
-                  <th className="py-2 pr-4 w-40 text-right">Actions</th>
+                  <th className="py-2 pr-4 w-32 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((d) => (
                   <tr key={d.id} className="border-b last:border-0">
-                    <td className="py-2 pr-4 font-medium">{d.name || "—"}</td>
+                    <td className="py-2 pr-4 font-medium">
+                      {d.name ? (
+                        <Link to={`/deals/${d.id}`} className="text-indigo-600 hover:underline">
+                          {d.name}
+                        </Link>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td className="py-2 pr-4">{d.account_name ?? d.account_id ?? "—"}</td>
                     <td className="py-2 pr-4">{d.owner_email ?? d.owner_id ?? "—"}</td>
                     <td className="py-2 pr-4">
@@ -296,14 +315,22 @@ export default function DealsPage() {
                     <td className="py-2 pr-4">{d.amount ?? "—"}</td>
                     <td className="py-2 pr-4">{d.currency ?? "—"}</td>
                     <td className="py-2 pr-4">
-                      {d.expected_close_date ? new Date(d.expected_close_date).toLocaleDateString() : "—"}
+                      {d.expected_close_date
+                        ? new Date(d.expected_close_date).toLocaleDateString()
+                        : "—"}
                     </td>
                     <td className="py-2 pr-4">{d.source ?? "—"}</td>
                     <td className="py-2 pr-4 text-right">
-                      <button onClick={() => onEdit(d)} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">
+                      <button
+                        onClick={() => onEdit(d)}
+                        className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
+                      >
                         Edit
                       </button>
-                      <button onClick={() => onDelete(d)} className="px-2 py-1 rounded border hover:bg-gray-50">
+                      <button
+                        onClick={() => onDelete(d)}
+                        className="px-2 py-1 rounded border hover:bg-gray-50"
+                      >
                         Delete
                       </button>
                     </td>
@@ -319,14 +346,22 @@ export default function DealsPage() {
             <div className="flex gap-2">
               <button
                 disabled={!hasPrev}
-                onClick={() => { const next = Math.max(1, page - 1); setPage(next); fetchDeals(next); }}
+                onClick={() => {
+                  const next = Math.max(1, page - 1);
+                  setPage(next);
+                  fetchDeals(next);
+                }}
                 className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
               >
                 ‹ Prev
               </button>
               <button
                 disabled={!hasNext}
-                onClick={() => { const next = page + 1; setPage(next); fetchDeals(next); }}
+                onClick={() => {
+                  const next = page + 1;
+                  setPage(next);
+                  fetchDeals(next);
+                }}
                 className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
               >
                 Next ›
@@ -336,7 +371,7 @@ export default function DealsPage() {
         </>
       )}
 
-      {/* modal */}
+      {/* modal (değişmedi) */}
       {open && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white w-[720px] max-w-[95vw] rounded-xl shadow p-5">
@@ -376,13 +411,15 @@ export default function DealsPage() {
                   <input
                     type="date"
                     value={form.expected_close_date}
-                    onChange={(e) => setForm((f) => ({ ...f, expected_close_date: e.target.value }))}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, expected_close_date: e.target.value }))
+                    }
                     className="w-full px-3 py-2 rounded-md border text-sm"
                   />
                 </Field>
               </div>
 
-              {/* Account lookup (required) */}
+              {/* Account lookup */}
               <Field label="Account">
                 <input
                   value={form.account_name}
@@ -409,7 +446,10 @@ export default function DealsPage() {
                         }}
                         className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
                       >
-                        {a.name}{a.industry ? <span className="text-gray-500"> — {a.industry}</span> : null}
+                        {a.name}
+                        {a.industry ? (
+                          <span className="text-gray-500"> — {a.industry}</span>
+                        ) : null}
                       </button>
                     ))}
                   </div>
@@ -442,18 +482,24 @@ export default function DealsPage() {
                 </select>
               </Field>
 
-              {/* Owner info (readonly) */}
               <div className="text-xs text-gray-500">
                 {editing ? (
-                  <>Owner: <b>{form.owner_email_hint ?? "—"}</b></>
+                  <>
+                    Owner: <b>{form.owner_email_hint ?? "—"}</b>
+                  </>
                 ) : (
-                  <>Owner: <b>bu kaydı oluşturan kullanıcı</b> olacaktır.</>
+                  <>
+                    Owner: <b>bu kaydı oluşturan kullanıcı</b> olacaktır.
+                  </>
                 )}
               </div>
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setOpen(false)} className="px-3 py-1.5 rounded-md border hover:bg-gray-50">
+              <button
+                onClick={() => setOpen(false)}
+                className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+              >
                 Cancel
               </button>
               <button
