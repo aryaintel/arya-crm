@@ -1,12 +1,12 @@
 # backend/app/api/deals.py
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from sqlalchemy import func, asc
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import asc
 
 from .deps import get_db, get_current_user, CurrentUser, require_permissions
 from ..models import Account, Pipeline, Stage, Opportunity
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/deals", tags=["deals"])
 # ---------------------------
 
 class DealCreate(BaseModel):
-    account_id: int
+    account_id: int = Field(..., description="Deal must belong to an account")
     name: str
     amount: Optional[int] = None
     currency: Optional[str] = None
@@ -35,10 +35,39 @@ class DealUpdate(BaseModel):
     expected_close_date: Optional[date] = None
     source: Optional[str] = None
     stage_id: Optional[int] = None
+    # Not: owner_id / account_id update ile değiştirilmiyor (tasarım gereği)
 
 
 class MoveStage(BaseModel):
     stage_id: int
+
+
+class DealOut(BaseModel):
+    id: int
+    tenant_id: int
+    account_id: int
+    account_name: Optional[str] = None
+    owner_id: int
+    owner_email: Optional[str] = None
+    name: str
+    amount: Optional[int] = None
+    currency: Optional[str] = None
+    stage_id: int
+    expected_close_date: Optional[date] = None
+    source: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# --- Stages lookup için çıkış şeması (yeni) ---
+class StageOut(BaseModel):
+    id: int
+    no: int
+    name: str
+
+    class Config:
+        from_attributes = True
 
 
 # ---------------------------
@@ -48,7 +77,11 @@ class MoveStage(BaseModel):
 def ensure_default_pipeline(db: Session, tenant_id: int) -> Pipeline:
     """
     Tenant için 'Sales' isimli default pipeline yoksa oluşturur
-    ve temel aşamaları ekler.
+    ve temel aşamaları ekler (hard-coded):
+      0: Idea
+      1: Business Case
+      2: Negotiation
+      3: Win / Lost
     """
     p = db.query(Pipeline).filter_by(tenant_id=tenant_id, name="Sales").first()
     if not p:
@@ -57,10 +90,10 @@ def ensure_default_pipeline(db: Session, tenant_id: int) -> Pipeline:
         db.flush()  # p.id gerekli
 
         defaults = [
-            ("New",        1, 10),
-            ("Qualified",  2, 30),
-            ("Proposal",   3, 60),
-            ("Won",        4, 100),
+            ("Idea",          0, 5),
+            ("Business Case", 1, 25),
+            ("Negotiation",   2, 60),
+            ("Win / Lost",    3, 100),
         ]
         for n, order_idx, prob in defaults:
             db.add(
@@ -104,6 +137,42 @@ def resolve_stage_id(db: Session, tenant_id: int, stage_id: Optional[int]) -> in
     return st.id
 
 
+def _ensure_account_in_tenant(db: Session, tenant_id: int, account_id: int) -> Account:
+    acc = (
+        db.query(Account)
+        .filter(Account.id == account_id, Account.tenant_id == tenant_id)
+        .first()
+    )
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return acc
+
+
+def _guard_admin_or_owner(opp: Opportunity, current: CurrentUser):
+    if current.role_name == "admin":
+        return
+    if opp.owner_id == current.id:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin or owner can modify this deal")
+
+
+def _serialize(opp: Opportunity) -> DealOut:
+    return DealOut.model_validate({
+        "id": opp.id,
+        "tenant_id": opp.tenant_id,
+        "account_id": opp.account_id,
+        "account_name": getattr(getattr(opp, "account", None), "name", None),
+        "owner_id": opp.owner_id,
+        "owner_email": getattr(getattr(opp, "owner", None), "email", None),
+        "name": opp.name,
+        "amount": opp.amount,
+        "currency": opp.currency,
+        "stage_id": opp.stage_id,
+        "expected_close_date": opp.expected_close_date,
+        "source": opp.source,
+    })
+
+
 # ---------------------------
 # Endpoints
 # ---------------------------
@@ -122,7 +191,11 @@ def list_deals(
     stage_id: Optional[int] = None,
     account_id: Optional[int] = None,
 ):
-    qs = db.query(Opportunity).filter(Opportunity.tenant_id == current.tenant_id)
+    qs = (
+        db.query(Opportunity)
+        .options(joinedload(Opportunity.account), joinedload(Opportunity.owner))
+        .filter(Opportunity.tenant_id == current.tenant_id)
+    )
     if q:
         qs = qs.filter(Opportunity.name.ilike(f"%{q}%"))
     if stage_id:
@@ -131,13 +204,37 @@ def list_deals(
         qs = qs.filter(Opportunity.account_id == account_id)
 
     total = qs.count()
-    items: List[Opportunity] = (
+    rows: List[Opportunity] = (
         qs.order_by(Opportunity.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
     )
+
+    items = [_serialize(r) for r in rows]
     return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+# ---- STAGES LOOKUP (yeni) ----
+@router.get(
+    "/stages",
+    summary="List available stages for default Sales pipeline",
+    response_model=List[StageOut],
+    dependencies=[Depends(require_permissions(["deals:read"]))],
+)
+def list_stages(
+    db: Session = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    p = ensure_default_pipeline(db, current.tenant_id)
+    rows = (
+        db.query(Stage)
+        .filter(Stage.pipeline_id == p.id)
+        .order_by(asc(Stage.order_index))
+        .all()
+    )
+    return [StageOut(id=s.id, no=s.order_index, name=s.name) for s in rows]
+# ------------------------------
 
 
 @router.post(
@@ -152,20 +249,14 @@ def create_deal(
     current: CurrentUser = Depends(get_current_user),
 ):
     # Hesap tenant'a mı ait?
-    acc = (
-        db.query(Account)
-        .filter(Account.id == body.account_id, Account.tenant_id == current.tenant_id)
-        .first()
-    )
-    if not acc:
-        raise HTTPException(status_code=404, detail="Account not found")
+    _ensure_account_in_tenant(db, current.tenant_id, body.account_id)
 
     st_id = resolve_stage_id(db, current.tenant_id, body.stage_id)
 
-    deal = Opportunity(
+    opp = Opportunity(
         tenant_id=current.tenant_id,
         account_id=body.account_id,
-        owner_id=current.id,
+        owner_id=current.id,  # current user owner
         name=body.name,
         amount=body.amount,
         currency=body.currency or "USD",
@@ -173,10 +264,10 @@ def create_deal(
         expected_close_date=body.expected_close_date,
         source=body.source,
     )
-    db.add(deal)
+    db.add(opp)
     db.commit()
-    db.refresh(deal)
-    return deal
+    db.refresh(opp)
+    return _serialize(opp)
 
 
 @router.get(
@@ -191,12 +282,13 @@ def get_deal(
 ):
     d = (
         db.query(Opportunity)
+        .options(joinedload(Opportunity.account), joinedload(Opportunity.owner))
         .filter(Opportunity.id == deal_id, Opportunity.tenant_id == current.tenant_id)
         .first()
     )
     if not d:
         raise HTTPException(status_code=404, detail="Deal not found")
-    return d
+    return _serialize(d)
 
 
 @router.patch(
@@ -218,16 +310,23 @@ def update_deal(
     if not d:
         raise HTTPException(status_code=404, detail="Deal not found")
 
+    _guard_admin_or_owner(d, current)
+
     data = body.model_dump(exclude_unset=True)
     if "stage_id" in data:
         data["stage_id"] = resolve_stage_id(db, current.tenant_id, data["stage_id"])
+
+    # account_id/owner_id client'tan değiştirilemez (tasarım gereği) – yoksa ignore
+    for blocked in ("account_id", "owner_id"):
+        if blocked in data:
+            data.pop(blocked, None)
 
     for k, v in data.items():
         setattr(d, k, v)
 
     db.commit()
     db.refresh(d)
-    return d
+    return _serialize(d)
 
 
 @router.post(
@@ -249,10 +348,12 @@ def move_stage(
     if not d:
         raise HTTPException(status_code=404, detail="Deal not found")
 
+    _guard_admin_or_owner(d, current)
+
     d.stage_id = resolve_stage_id(db, current.tenant_id, body.stage_id)
     db.commit()
     db.refresh(d)
-    return d
+    return _serialize(d)
 
 
 @router.delete(
@@ -273,6 +374,8 @@ def delete_deal(
     )
     if not d:
         raise HTTPException(status_code=404, detail="Deal not found")
+
+    _guard_admin_or_owner(d, current)
 
     db.delete(d)
     db.commit()

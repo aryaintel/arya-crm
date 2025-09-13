@@ -1,22 +1,19 @@
-// src/pages/Deals.tsx
+// src/pages/Deals.tsx — UI: Opportunities
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type Deal = {
   id: number | string;
-  name: string;
-  stage?: string | null;
-  current_stage?: string | null;
-  source?: string | null;
-  expected_close_date?: string | null; // ISO (YYYY-MM-DD)
-  account_id?: number | string | null;
+  account_id: number;
   account_name?: string | null;
-  owner_id?: number | string | null;
-  owner_name?: string | null;
-  created_at?: string;
-  updated_at?: string;
-  owner?: { id?: number | string; name?: string; email?: string } | null;
-  account?: { id?: number | string; name?: string; industry?: string } | null;
+  owner_id: number;
+  owner_email?: string | null;
+  name: string;
+  amount?: number | null;
+  currency?: string | null;
+  stage_id?: number | null;
+  expected_close_date?: string | null;
+  source?: string | null;
 };
 
 type DealsPayload = {
@@ -24,11 +21,16 @@ type DealsPayload = {
   total?: number;
   page?: number;
   page_size?: number;
-  meta?: {
-    total?: number;
-    page?: number;
-    page_size?: number;
-  };
+};
+
+type AccountRow = { id: number; name: string; industry?: string | null };
+type AccountsList = { items: AccountRow[] };
+
+// Backend /deals/stages çıkışı: { id, no, name }
+type StageRow = {
+  id: number;
+  no: number;   // 0..3
+  name: string; // "Idea" / "Business Case" / ...
 };
 
 export default function DealsPage() {
@@ -40,59 +42,86 @@ export default function DealsPage() {
   const [pageSize] = useState(20);
   const [total, setTotal] = useState<number | undefined>();
 
+  // stages
+  const [stages, setStages] = useState<StageRow[]>([]);
+  const stageMap = useMemo(
+    () => Object.fromEntries(stages.map((s) => [s.id, s] as const)),
+    [stages]
+  );
+
+  // account lookup
+  const [accQuery, setAccQuery] = useState("");
+  const [accOptions, setAccOptions] = useState<AccountRow[]>([]);
+  const [accLoading, setAccLoading] = useState(false);
+
+  // modal
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Deal | null>(null);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    name: string;
+    amount: string;
+    currency: string;
+    expected_close_date: string;
+    source: string;
+    account_id: string | number | "";
+    account_name: string;
+    stage_id: number | "";
+    owner_email_hint?: string | null;
+  }>({
     name: "",
-    stage: "",
-    current_stage: "",
-    source: "",
+    amount: "",
+    currency: "",
     expected_close_date: "",
-    account_id: "" as string | number | "",
-    owner_id: "" as string | number | "",
+    source: "",
+    account_id: "",
     account_name: "",
-    owner_name: "",
+    stage_id: "",
+    owner_email_hint: null,
   });
 
-  const isValid = useMemo(() => (form.name || "").trim().length > 1, [form]);
+  const isValid = useMemo(() => {
+    const hasName = (form.name || "").trim().length > 1;
+    const hasAccount = form.account_id !== "" && form.account_id !== null;
+    return hasName && hasAccount;
+  }, [form]);
 
   const byIdUrl = (id: number | string) => `/deals/${id}/`;
   const byIdUrlNoSlash = (id: number | string) => `/deals/${id}`;
 
+  // ------- fetch deals -------
   const fetchDeals = async (p = page) => {
     setLoading(true);
     setError(null);
     try {
-      const qs = new URLSearchParams({
-        page: String(p),
-        page_size: String(pageSize),
-      });
+      const qs = new URLSearchParams({ page: String(p), page_size: String(pageSize) });
       const data = await apiGet<DealsPayload>(`/deals/?${qs.toString()}`);
-
       const list: Deal[] = Array.isArray((data as any).items)
         ? ((data as any).items as Deal[])
-        : (Array.isArray(data as any) ? ((data as any) as Deal[]) : []);
+        : [];
       setItems(list);
-
-      const meta = data.meta ?? data;
-      if (typeof meta?.total === "number") setTotal(meta.total);
-      else setTotal(list.length);
-
-      if (typeof meta?.page === "number") setPage(meta.page);
-      else setPage(p);
+      setTotal(typeof data.total === "number" ? data.total : list.length);
+      setPage(typeof data.page === "number" ? data.page : p);
     } catch (e: any) {
-      const msg =
-        (e instanceof ApiError && e.message) ||
-        e?.message ||
-        "Deals fetch failed";
+      const msg = (e instanceof ApiError && e.message) || e?.message || "Opportunities fetch failed";
       setError(String(msg));
     } finally {
       setLoading(false);
     }
   };
 
+  // ------- fetch stages (lookup) -------
+  const fetchStages = async () => {
+    try {
+      const list = await apiGet<StageRow[]>("/deals/stages");
+      setStages(list);
+    } catch {
+      setStages([]);
+    }
+  };
+
   useEffect(() => {
     fetchDeals(1);
+    fetchStages(); // list görünürken stage isimleri için hazır dursun
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -102,24 +131,48 @@ export default function DealsPage() {
   }, [page, total]);
 
   const hasPrev = page > 1;
-  const hasNext =
-    typeof total === "number" ? page * pageSize < total : items.length === pageSize;
+  const hasNext = typeof total === "number" ? page * pageSize < total : items.length === pageSize;
 
+  // ------- account lookup -------
+  const fetchAccounts = async (q: string) => {
+    setAccLoading(true);
+    try {
+      const qs = new URLSearchParams({ q, size: "10", page: "1" });
+      const data = await apiGet<AccountsList>(`/accounts/?${qs.toString()}`);
+      const list = Array.isArray((data as any).items) ? ((data as any).items as AccountRow[]) : [];
+      setAccOptions(list);
+    } catch {
+      setAccOptions([]);
+    } finally {
+      setAccLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (accQuery.trim().length) fetchAccounts(accQuery.trim());
+      else setAccOptions([]);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [accQuery]);
+
+  // ------- actions -------
   const onRefresh = () => fetchDeals(page);
 
   const onNew = () => {
     setEditing(null);
     setForm({
       name: "",
-      stage: "",
-      current_stage: "",
-      source: "",
+      amount: "",
+      currency: "",
       expected_close_date: "",
+      source: "",
       account_id: "",
-      owner_id: "",
       account_name: "",
-      owner_name: "",
+      stage_id: "",
+      owner_email_hint: null,
     });
+    setAccQuery(""); setAccOptions([]);
     setOpen(true);
   };
 
@@ -127,33 +180,27 @@ export default function DealsPage() {
     setEditing(d);
     setForm({
       name: d.name ?? "",
-      stage: d.stage ?? "",
-      current_stage: d.current_stage ?? "",
-      source: d.source ?? "",
+      amount: d.amount != null ? String(d.amount) : "",
+      currency: d.currency ?? "",
       expected_close_date: (d.expected_close_date ?? "").slice(0, 10),
-      account_id: (d.account_id ?? d.account?.id ?? "").toString(),
-      owner_id: (d.owner_id ?? d.owner?.id ?? "").toString(),
-      account_name: d.account_name ?? d.account?.name ?? "",
-      owner_name: d.owner_name ?? d.owner?.name ?? "",
+      source: d.source ?? "",
+      account_id: d.account_id,
+      account_name: d.account_name ?? "",
+      stage_id: d.stage_id ?? "",
+      owner_email_hint: d.owner_email ?? null,
     });
+    setAccQuery(""); setAccOptions([]);
     setOpen(true);
   };
 
   const onDelete = async (row: Deal) => {
-    if (!confirm(`Delete deal "${row.name ?? row.id}"?`)) return;
+    if (!confirm(`Delete opportunity "${row.name ?? row.id}"?`)) return;
     try {
-      try {
-        await apiDelete(byIdUrl(row.id));
-      } catch {
-        await apiDelete(byIdUrlNoSlash(row.id));
-      }
+      try { await apiDelete(byIdUrl(row.id)); } catch { await apiDelete(byIdUrlNoSlash(row.id)); }
       await fetchDeals(page);
       alert("Deleted.");
     } catch (e: any) {
-      const msg =
-        (e instanceof ApiError && e.message) ||
-        e?.message ||
-        "Delete failed";
+      const msg = (e instanceof ApiError && e.message) || e?.message || "Delete failed";
       alert(String(msg));
     }
   };
@@ -161,78 +208,62 @@ export default function DealsPage() {
   const onSave = async () => {
     if (!isValid) return;
 
-    const payload = {
+    const createPayload = {
       name: form.name.trim(),
-      stage: form.stage.trim() || null,
-      current_stage: form.current_stage.trim() || null,
-      source: form.source.trim() || null,
+      amount: form.amount.trim() === "" ? null : Number(form.amount),
+      currency: form.currency.trim() || null,
       expected_close_date: form.expected_close_date || null,
-      account_id:
-        form.account_id === "" || form.account_id === null
-          ? null
-          : Number(form.account_id),
-      owner_id:
-        form.owner_id === "" || form.owner_id === null
-          ? null
-          : Number(form.owner_id),
+      source: form.source.trim() || null,
+      account_id: Number(form.account_id),
+      stage_id: form.stage_id === "" ? undefined : Number(form.stage_id), // seçilmezse BE default atar
+    };
+
+    const updatePayload = {
+      name: form.name.trim(),
+      amount: form.amount.trim() === "" ? null : Number(form.amount),
+      currency: form.currency.trim() || null,
+      expected_close_date: form.expected_close_date || null,
+      source: form.source.trim() || null,
+      stage_id: form.stage_id === "" ? undefined : Number(form.stage_id),
+      // account_id / owner_id UPDATE'te gönderilmiyor
     };
 
     try {
       if (editing) {
-        try {
-          await apiPatch(byIdUrl(editing.id), payload);
-        } catch {
-          await apiPatch(byIdUrlNoSlash(editing.id), payload);
-        }
+        try { await apiPatch(byIdUrl(editing.id), updatePayload); }
+        catch { await apiPatch(byIdUrlNoSlash(editing.id), updatePayload); }
       } else {
-        try {
-          await apiPost("/deals/", payload);
-        } catch {
-          await apiPost("/deals", payload);
-        }
+        await apiPost("/deals/", createPayload);
       }
       setOpen(false);
       await fetchDeals(page);
       alert("Saved.");
     } catch (e: any) {
-      const msg =
-        (e instanceof ApiError && e.message) ||
-        e?.message ||
-        "Save failed";
+      const msg = (e instanceof ApiError && e.message) || e?.message || "Save failed";
       alert(String(msg));
     }
   };
 
   return (
     <div className="bg-white rounded-xl shadow p-6">
-      {/* header */}
+      {/* header — “Deals” yerine “Opportunities” */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-        <h2 className="text-lg font-medium">Deals</h2>
+        <h2 className="text-lg font-medium">Opportunities</h2>
         <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
-          >
+          <button type="button" onClick={onRefresh} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
             Refresh
           </button>
-          <button
-            type="button"
-            onClick={onNew}
-            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
-          >
+          <button type="button" onClick={onNew} className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500">
             + New
           </button>
         </div>
       </div>
 
       {/* states */}
-      {loading && <div className="text-sm text-gray-500">Loading deals…</div>}
+      {loading && <div className="text-sm text-gray-500">Loading opportunities…</div>}
       {error && <div className="text-sm text-red-600">Error: {error}</div>}
       {!loading && !error && items.length === 0 && (
-        <div className="text-sm text-gray-500">
-          No deals yet. Add one and click <b>Refresh</b>.
-        </div>
+        <div className="text-sm text-gray-500">No opportunities yet. Add one and click <b>Refresh</b>.</div>
       )}
 
       {/* list */}
@@ -243,12 +274,13 @@ export default function DealsPage() {
               <thead>
                 <tr className="text-left border-b">
                   <th className="py-2 pr-4">Name</th>
-                  <th className="py-2 pr-4">Stage</th>
-                  <th className="py-2 pr-4">Current Stage</th>
-                  <th className="py-2 pr-4">Source</th>
-                  <th className="py-2 pr-4">Expected Close</th>
                   <th className="py-2 pr-4">Account</th>
                   <th className="py-2 pr-4">Owner</th>
+                  <th className="py-2 pr-4">Stage</th>
+                  <th className="py-2 pr-4">Amount</th>
+                  <th className="py-2 pr-4">Currency</th>
+                  <th className="py-2 pr-4">Expected Close</th>
+                  <th className="py-2 pr-4">Source</th>
                   <th className="py-2 pr-4 w-40 text-right">Actions</th>
                 </tr>
               </thead>
@@ -256,31 +288,22 @@ export default function DealsPage() {
                 {items.map((d) => (
                   <tr key={d.id} className="border-b last:border-0">
                     <td className="py-2 pr-4 font-medium">{d.name || "—"}</td>
-                    <td className="py-2 pr-4">{d.stage || "—"}</td>
-                    <td className="py-2 pr-4">{d.current_stage || "—"}</td>
-                    <td className="py-2 pr-4">{d.source || "—"}</td>
+                    <td className="py-2 pr-4">{d.account_name ?? d.account_id ?? "—"}</td>
+                    <td className="py-2 pr-4">{d.owner_email ?? d.owner_id ?? "—"}</td>
                     <td className="py-2 pr-4">
-                      {d.expected_close_date
-                        ? new Date(d.expected_close_date).toLocaleDateString()
-                        : "—"}
+                      {d.stage_id ? (stageMap[d.stage_id]?.name ?? d.stage_id) : "—"}
                     </td>
+                    <td className="py-2 pr-4">{d.amount ?? "—"}</td>
+                    <td className="py-2 pr-4">{d.currency ?? "—"}</td>
                     <td className="py-2 pr-4">
-                      {d.account_name ?? d.account?.name ?? d.account_id ?? "—"}
+                      {d.expected_close_date ? new Date(d.expected_close_date).toLocaleDateString() : "—"}
                     </td>
-                    <td className="py-2 pr-4">
-                      {d.owner_name ?? d.owner?.name ?? d.owner_id ?? "—"}
-                    </td>
+                    <td className="py-2 pr-4">{d.source ?? "—"}</td>
                     <td className="py-2 pr-4 text-right">
-                      <button
-                        onClick={() => onEdit(d)}
-                        className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
-                      >
+                      <button onClick={() => onEdit(d)} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">
                         Edit
                       </button>
-                      <button
-                        onClick={() => onDelete(d)}
-                        className="px-2 py-1 rounded border hover:bg-gray-50"
-                      >
+                      <button onClick={() => onDelete(d)} className="px-2 py-1 rounded border hover:bg-gray-50">
                         Delete
                       </button>
                     </td>
@@ -296,22 +319,14 @@ export default function DealsPage() {
             <div className="flex gap-2">
               <button
                 disabled={!hasPrev}
-                onClick={() => {
-                  const next = Math.max(1, page - 1);
-                  setPage(next);
-                  fetchDeals(next);
-                }}
+                onClick={() => { const next = Math.max(1, page - 1); setPage(next); fetchDeals(next); }}
                 className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
               >
                 ‹ Prev
               </button>
               <button
                 disabled={!hasNext}
-                onClick={() => {
-                  const next = page + 1;
-                  setPage(next);
-                  fetchDeals(next);
-                }}
+                onClick={() => { const next = page + 1; setPage(next); fetchDeals(next); }}
                 className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
               >
                 Next ›
@@ -326,7 +341,7 @@ export default function DealsPage() {
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
           <div className="bg-white w-[720px] max-w-[95vw] rounded-xl shadow p-5">
             <div className="text-lg font-semibold mb-4">
-              {editing ? "Edit Deal" : "New Deal"}
+              {editing ? "Edit Opportunity" : "New Opportunity"}
             </div>
 
             <div className="space-y-3">
@@ -339,84 +354,106 @@ export default function DealsPage() {
                 />
               </Field>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Stage">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <Field label="Amount">
                   <input
-                    value={form.stage}
-                    onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value }))}
+                    type="number"
+                    value={form.amount}
+                    onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
                     className="w-full px-3 py-2 rounded-md border text-sm"
-                    placeholder="Qualification"
+                    placeholder="10000"
                   />
                 </Field>
-                <Field label="Current Stage">
+                <Field label="Currency">
                   <input
-                    value={form.current_stage}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, current_stage: e.target.value }))
-                    }
+                    value={form.currency}
+                    onChange={(e) => setForm((f) => ({ ...f, currency: e.target.value }))}
                     className="w-full px-3 py-2 rounded-md border text-sm"
-                    placeholder="Discovery"
-                  />
-                </Field>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Source">
-                  <input
-                    value={form.source}
-                    onChange={(e) => setForm((f) => ({ ...f, source: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                    placeholder="Referral"
+                    placeholder="USD"
                   />
                 </Field>
                 <Field label="Expected Close">
                   <input
                     type="date"
                     value={form.expected_close_date}
-                    onChange={(e) =>
-                      setForm((f) => ({ ...f, expected_close_date: e.target.value }))
-                    }
+                    onChange={(e) => setForm((f) => ({ ...f, expected_close_date: e.target.value }))}
                     className="w-full px-3 py-2 rounded-md border text-sm"
                   />
                 </Field>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Account ID">
-                  <input
-                    value={form.account_id}
-                    onChange={(e) => setForm((f) => ({ ...f, account_id: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                    placeholder="2"
-                  />
-                  {form.account_name ? (
-                    <div className="text-xs text-gray-500 mt-1">
-                      Current account: <b>{form.account_name}</b>
-                    </div>
-                  ) : null}
-                </Field>
+              {/* Account lookup (required) */}
+              <Field label="Account">
+                <input
+                  value={form.account_name}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setForm((f) => ({ ...f, account_name: val, account_id: "" }));
+                    setAccQuery(val);
+                  }}
+                  className="w-full px-3 py-2 rounded-md border text-sm"
+                  placeholder="Type to search accounts…"
+                />
+                {accLoading ? (
+                  <div className="text-xs text-gray-500 mt-1">Searching…</div>
+                ) : accOptions.length > 0 ? (
+                  <div className="mt-1 border rounded-md max-h-44 overflow-auto">
+                    {accOptions.map((a) => (
+                      <button
+                        key={a.id}
+                        type="button"
+                        onClick={() => {
+                          setForm((f) => ({ ...f, account_id: a.id, account_name: a.name }));
+                          setAccOptions([]);
+                          setAccQuery("");
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                      >
+                        {a.name}{a.industry ? <span className="text-gray-500"> — {a.industry}</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : accQuery.trim().length ? (
+                  <div className="text-xs text-gray-500 mt-1">No matches.</div>
+                ) : null}
+                {!form.account_id && (
+                  <div className="text-xs text-amber-600 mt-1">Account is required.</div>
+                )}
+              </Field>
 
-                <Field label="Owner ID">
-                  <input
-                    value={form.owner_id}
-                    onChange={(e) => setForm((f) => ({ ...f, owner_id: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                    placeholder="1"
-                  />
-                  {form.owner_name ? (
-                    <div className="text-xs text-gray-500 mt-1">
-                      Current owner: <b>{form.owner_name}</b>
-                    </div>
-                  ) : null}
-                </Field>
+              {/* Stage dropdown */}
+              <Field label="Stage">
+                <select
+                  value={form.stage_id}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      stage_id: e.target.value === "" ? "" : Number(e.target.value),
+                    }))
+                  }
+                  className="w-full px-3 py-2 rounded-md border text-sm bg-white"
+                >
+                  <option value="">(Default pipeline first stage)</option>
+                  {stages.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.no}. {s.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              {/* Owner info (readonly) */}
+              <div className="text-xs text-gray-500">
+                {editing ? (
+                  <>Owner: <b>{form.owner_email_hint ?? "—"}</b></>
+                ) : (
+                  <>Owner: <b>bu kaydı oluşturan kullanıcı</b> olacaktır.</>
+                )}
               </div>
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
-              <button
-                onClick={() => setOpen(false)}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
-              >
+              <button onClick={() => setOpen(false)} className="px-3 py-1.5 rounded-md border hover:bg-gray-50">
                 Cancel
               </button>
               <button
