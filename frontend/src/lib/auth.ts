@@ -1,5 +1,5 @@
 // src/lib/auth.ts
-// Basit token & rol & tenant yönetimi + yardımcılar
+// Token & rol & tenant yönetimi + güvenli "auth changed" olayı
 
 const TOKEN_KEY = "aryaintel_token";
 const ROLE_KEY = "aryaintel_role";
@@ -7,37 +7,93 @@ const TENANT_KEY = "aryaintel_tenant";
 
 export type RoleName = "admin" | "member" | "guest";
 
+/** App tarafından dinlenecek global event adı */
+export const AUTH_EVENT = "arya:auth-changed";
+
+/** window korumalı ve her ortamda güvenli event yayını */
+function emitAuthChanged() {
+  try {
+    if (typeof window === "undefined" || !("dispatchEvent" in window)) return;
+    // queueMicrotask bazı ortamlarda yok → setTimeout(0) kullan
+    setTimeout(() => {
+      try {
+        window.dispatchEvent(new CustomEvent(AUTH_EVENT));
+      } catch {
+        /* no-op */
+      }
+    }, 0);
+  } catch {
+    /* no-op */
+  }
+}
+
 /* ---------- Token ---------- */
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
 }
 export function setToken(tok: string) {
-  localStorage.setItem(TOKEN_KEY, tok);
+  try {
+    localStorage.setItem(TOKEN_KEY, tok);
+  } finally {
+    emitAuthChanged();
+  }
 }
 export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } finally {
+    emitAuthChanged();
+  }
 }
 
 /* ---------- Role ---------- */
 export function getRole(): RoleName {
-  return (localStorage.getItem(ROLE_KEY) as RoleName) || "guest";
+  try {
+    return (localStorage.getItem(ROLE_KEY) as RoleName) || "guest";
+  } catch {
+    return "guest";
+  }
 }
 export function setRole(role: RoleName) {
-  localStorage.setItem(ROLE_KEY, role);
+  try {
+    localStorage.setItem(ROLE_KEY, role);
+  } finally {
+    emitAuthChanged();
+  }
 }
 export function clearRole() {
-  localStorage.removeItem(ROLE_KEY);
+  try {
+    localStorage.removeItem(ROLE_KEY);
+  } finally {
+    emitAuthChanged();
+  }
 }
 
 /* ---------- Tenant ---------- */
 export function getTenantSlug(): string | null {
-  return localStorage.getItem(TENANT_KEY);
+  try {
+    return localStorage.getItem(TENANT_KEY);
+  } catch {
+    return null;
+  }
 }
 export function setTenantSlug(slug: string) {
-  localStorage.setItem(TENANT_KEY, slug);
+  try {
+    localStorage.setItem(TENANT_KEY, slug);
+  } finally {
+    emitAuthChanged();
+  }
 }
 export function clearTenantSlug() {
-  localStorage.removeItem(TENANT_KEY);
+  try {
+    localStorage.removeItem(TENANT_KEY);
+  } finally {
+    emitAuthChanged();
+  }
 }
 
 /* ---------- Headers / helpers ---------- */

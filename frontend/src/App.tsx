@@ -1,4 +1,3 @@
-// src/App.tsx
 import {
   NavLink,
   Routes,
@@ -7,7 +6,7 @@ import {
   Navigate,
   useNavigate,
 } from "react-router-dom";
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState, useCallback } from "react";
 
 import DashboardPage from "./pages/Dashboard";
 import AccountsPage from "./pages/Accounts";
@@ -15,12 +14,12 @@ import ContactsPage from "./pages/Contacts";
 import DealsPage from "./pages/Deals";
 import LoginPage from "./pages/Login";
 
-import { apiGet } from "./lib/api";
-import { clearToken, getToken } from "./lib/auth";
+import { apiGet, ApiError } from "./lib/api";
+import { clearToken, getToken, AUTH_EVENT } from "./lib/auth";
 
 const UsersPage = lazy(() => import("./pages/Users"));
 
-type Me = { id: number; email: string; role: string };
+type Me = { id: number; email: string; role: "admin" | "member" };
 
 function usePageTitle() {
   const { pathname } = useLocation();
@@ -37,35 +36,65 @@ function RequireAuth({ children }: { children: JSX.Element }) {
   return children;
 }
 
+const ME_PATHS = ["/auth/me", "/me", "/users/me"] as const;
+
 export default function App() {
   const title = usePageTitle();
   const nav = useNavigate();
   const [me, setMe] = useState<Me | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-
-    (async () => {
-      // token yoksa kullanıcıyı çıkar
-      if (!getToken()) {
-        setMe(null);
-        return;
-      }
+  /** /me endpointini birden fazla olası path ile dener */
+  const fetchMe = useCallback(async (token: string): Promise<Me> => {
+    let lastErr: unknown;
+    for (const p of ME_PATHS) {
       try {
-        // BE’ye göre "/me" veya "/auth/me" olabilir; login’de "/auth/me" kullandıysan onu yaz
-        const data = await apiGet<Me>("/auth/me");
-        if (alive) setMe(data);
-      } catch {
-        // token bozuk/expired ise temizle
+        return await apiGet<Me>(p, token);
+      } catch (e) {
+        lastErr = e;
+        // 404 ise diğer path'e geç; 401/403'te direkt fırlat (token geçersiz)
+        if (e instanceof ApiError) {
+          if (e.status === 401 || e.status === 403) throw e;
+          if (e.status === 404) continue;
+        }
+        // 0 (network) veya başka bir durum: sonradan üstte ele alınsın
+        continue;
+      }
+    }
+    throw lastErr ?? new ApiError(404, "me endpoint not found");
+  }, []);
+
+  const loadMe = useCallback(async () => {
+    const token = getToken();
+    if (!token) {
+      setMe(null);
+      return;
+    }
+    try {
+      const data = await fetchMe(token);
+      setMe(data ?? null);
+    } catch (e) {
+      // Sadece 401/403'te oturumu sıfırla; diğer hatalarda token'ı koru
+      if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
         clearToken();
         setMe(null);
+      } else {
+        // me alınamadı ama token duruyor: UI'yı bozmadan bekle
+        setMe(null);
       }
-    })();
+    }
+  }, [fetchMe]);
 
-    return () => {
-      alive = false;
-    };
-  }, []); // ilk yüklemede kontrol yeterli; daha ileri senaryoda token değişimini de izleyebilirsin
+  // İlk yüklemede
+  useEffect(() => {
+    loadMe();
+  }, [loadMe]);
+
+  // Login/Logout gibi durumlarda
+  useEffect(() => {
+    const handler = () => loadMe();
+    window.addEventListener(AUTH_EVENT, handler);
+    return () => window.removeEventListener(AUTH_EVENT, handler);
+  }, [loadMe]);
 
   const onLogout = () => {
     clearToken();
@@ -87,9 +116,7 @@ export default function App() {
             to="/"
             end
             className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
             }
           >
             Dashboard
@@ -97,9 +124,7 @@ export default function App() {
           <NavLink
             to="/accounts"
             className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
             }
           >
             Accounts
@@ -107,9 +132,7 @@ export default function App() {
           <NavLink
             to="/contacts"
             className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
             }
           >
             Contacts
@@ -117,9 +140,7 @@ export default function App() {
           <NavLink
             to="/deals"
             className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                isActive ? "bg-indigo-100 text-indigo-700" : ""
-              }`
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
             }
           >
             Opportunities
@@ -128,12 +149,10 @@ export default function App() {
             <NavLink
               to="/users"
               className={({ isActive }) =>
-                `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
-                  isActive ? "bg-indigo-100 text-indigo-700" : ""
-                }`
+                `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
               }
             >
-              Users (Admin)
+              Users
             </NavLink>
           )}
         </nav>
@@ -145,19 +164,13 @@ export default function App() {
         <header className="h-16 bg-white border-b shadow-sm flex items-center justify-between px-6">
           <h1 className="text-xl font-semibold">{title}</h1>
           <div className="flex items-center gap-3 text-sm text-gray-600">
-            <span>{me?.email ?? "guest"}</span>
+            <span>{me ? `${me.email} (${me.role})` : "guest"}</span>
             {getToken() ? (
-              <button
-                onClick={onLogout}
-                className="px-2 py-1 rounded border hover:bg-gray-50"
-              >
+              <button onClick={onLogout} className="px-2 py-1 rounded border hover:bg-gray-50">
                 Logout
               </button>
             ) : (
-              <NavLink
-                to="/login"
-                className="px-2 py-1 rounded border hover:bg-gray-50"
-              >
+              <NavLink to="/login" className="px-2 py-1 rounded border hover:bg-gray-50">
                 Login
               </NavLink>
             )}
@@ -167,7 +180,7 @@ export default function App() {
         {/* Content */}
         <main className="flex-1 p-6">
           <Routes>
-            {/* Login korumasız olmalı */}
+            {/* Login korumasız */}
             <Route path="/login" element={<LoginPage />} />
 
             <Route
@@ -202,13 +215,11 @@ export default function App() {
                 </RequireAuth>
               }
             />
-
-            {/* Admin sayfası – lazy; import sorunu App'i çökertmesin */}
             <Route
               path="/users"
               element={
                 <RequireAuth>
-                  <Suspense fallback={<div>Loading…</div>}>
+                  <Suspense fallback={<div className="text-sm text-gray-600">Loading…</div>}>
                     <UsersPage />
                   </Suspense>
                 </RequireAuth>
