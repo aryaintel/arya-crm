@@ -7,16 +7,16 @@ type Account = {
   name: string;
   industry?: string | null;
   website?: string | null;
-  owner_name?: string | null;   // read-only (liste için)
-  owner_id?: number | null;     // BE'ye gönderilecek alan
+  owner_email?: string | null; // backend'den geliyor, sadece görüntüleme
 };
 
 type AccountsPayload = {
   items: Account[];
   meta?: {
     page?: number;
-    page_size?: number;
+    size?: number;
     total?: number;
+    pages?: number;
     has_next?: boolean;
     has_prev?: boolean;
   };
@@ -34,16 +34,21 @@ export default function AccountsPage() {
   const [total, setTotal] = useState<number | undefined>();
   const [hasNext, setHasNext] = useState<boolean | undefined>();
   const [hasPrev, setHasPrev] = useState<boolean | undefined>();
+  const [pages, setPages] = useState<number | undefined>();
 
   // modal state
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
-  const [form, setForm] = useState<Partial<Account>>({
+  const [form, setForm] = useState<{
+    name: string;
+    industry: string;
+    website: string;
+  }>({
     name: "",
     industry: "",
     website: "",
-    owner_id: null,
   });
+
   const isValid = useMemo(() => (form.name || "").trim().length > 1, [form]);
 
   const byIdUrl = (id: number | string) => `/accounts/${id}/`;
@@ -55,7 +60,7 @@ export default function AccountsPage() {
     try {
       const qs = new URLSearchParams({
         page: String(page),
-        page_size: String(pageSize),
+        size: String(pageSize),
       });
       if (q.trim()) qs.set("q", q.trim());
 
@@ -63,8 +68,18 @@ export default function AccountsPage() {
 
       setItems(payload.items ?? []);
       setTotal(payload.meta?.total);
-      setHasNext(payload.meta?.has_next);
-      setHasPrev(payload.meta?.has_prev);
+      setPages(payload.meta?.pages);
+      // has_next / has_prev gelmezse hesapla
+      if (typeof payload.meta?.has_next === "boolean") {
+        setHasNext(payload.meta.has_next);
+      } else if (payload.meta?.pages) {
+        setHasNext(page < (payload.meta.pages ?? 1));
+      } else if (payload.meta?.total != null) {
+        setHasNext(page * pageSize < (payload.meta.total ?? 0));
+      } else {
+        setHasNext(undefined);
+      }
+      setHasPrev(typeof payload.meta?.has_prev === "boolean" ? payload.meta.has_prev : page > 1);
     } catch (e: any) {
       const msg =
         (e instanceof ApiError && e.message) ||
@@ -90,7 +105,7 @@ export default function AccountsPage() {
 
   const onNew = () => {
     setEditing(null);
-    setForm({ name: "", industry: "", website: "", owner_id: null });
+    setForm({ name: "", industry: "", website: "" });
     setOpen(true);
   };
 
@@ -100,8 +115,6 @@ export default function AccountsPage() {
       name: row.name || "",
       industry: row.industry || "",
       website: row.website || "",
-      owner_id: row.owner_id ?? null,
-      owner_name: row.owner_name ?? "",
     });
     setOpen(true);
   };
@@ -110,9 +123,9 @@ export default function AccountsPage() {
     if (!confirm(`Delete account "${row.name}"?`)) return;
     try {
       try {
-        await apiDelete(byIdUrl(row.id));           // /accounts/:id/
+        await apiDelete(byIdUrl(row.id)); // /accounts/:id/
       } catch {
-        await apiDelete(byIdUrlNoSlash(row.id));    // /accounts/:id
+        await apiDelete(byIdUrlNoSlash(row.id)); // /accounts/:id
       }
       await fetchAccounts();
       alert("Deleted.");
@@ -129,15 +142,11 @@ export default function AccountsPage() {
   const onSave = async () => {
     if (!isValid) return;
 
-    // owner_name BE'ye gönderilmez; BE owner_id bekler.
+    // owner backend tarafından current user olarak atanır — gönderme!
     const payload = {
-      name: form.name?.trim(),
-      industry: form.industry || null,
-      website: form.website || null,
-      owner_id:
-        form.owner_id === undefined || form.owner_id === null || Number.isNaN(form.owner_id)
-          ? null
-          : Number(form.owner_id),
+      name: form.name.trim(),
+      industry: form.industry.trim() || null,
+      website: form.website.trim() || null,
     };
 
     try {
@@ -174,9 +183,23 @@ export default function AccountsPage() {
             placeholder="Search name, industry…"
             className="px-3 py-1.5 rounded-md border text-sm w-64"
           />
-          <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">Search</button>
-          <button type="button" onClick={fetchAccounts} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">Refresh</button>
-          <button type="button" onClick={onNew} className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500">+ New</button>
+          <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
+            Search
+          </button>
+          <button
+            type="button"
+            onClick={fetchAccounts}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={onNew}
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+          >
+            + New
+          </button>
         </form>
       </div>
 
@@ -184,7 +207,9 @@ export default function AccountsPage() {
       {loading && <div className="text-sm text-gray-500">Loading accounts…</div>}
       {error && <div className="text-sm text-red-600">Error: {error}</div>}
       {!loading && !error && items.length === 0 && (
-        <div className="text-sm text-gray-500">No accounts yet. Add one and click <b>Refresh</b>.</div>
+        <div className="text-sm text-gray-500">
+          No accounts yet. Add one and click <b>Refresh</b>.
+        </div>
       )}
 
       {/* list */}
@@ -208,15 +233,32 @@ export default function AccountsPage() {
                     <td className="py-2 pr-4">{a.industry ?? "—"}</td>
                     <td className="py-2 pr-4">
                       {a.website ? (
-                        <a className="text-indigo-600 hover:underline" href={a.website} target="_blank" rel="noreferrer">
+                        <a
+                          className="text-indigo-600 hover:underline"
+                          href={a.website}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
                           {a.website}
                         </a>
-                      ) : "—"}
+                      ) : (
+                        "—"
+                      )}
                     </td>
-                    <td className="py-2 pr-4">{a.owner_name ?? (a.owner_id ?? "—")}</td>
+                    <td className="py-2 pr-4">{a.owner_email ?? "—"}</td>
                     <td className="py-2 pr-4 text-right">
-                      <button onClick={() => onEdit(a)} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">Edit</button>
-                      <button onClick={() => onDelete(a)} className="px-2 py-1 rounded border hover:bg-gray-50">Delete</button>
+                      <button
+                        onClick={() => onEdit(a)}
+                        className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => onDelete(a)}
+                        className="px-2 py-1 rounded border hover:bg-gray-50"
+                      >
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -228,6 +270,7 @@ export default function AccountsPage() {
           <div className="flex items-center justify-between mt-4 text-sm">
             <div className="text-gray-500">
               Page {page}
+              {typeof pages === "number" ? <> / {pages}</> : null}
               {typeof total === "number" ? <> • Total: {total}</> : null}
             </div>
             <div className="flex gap-2">
@@ -261,7 +304,7 @@ export default function AccountsPage() {
             <div className="space-y-3">
               <Field label="Name">
                 <input
-                  value={form.name ?? ""}
+                  value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   className="w-full px-3 py-2 rounded-md border text-sm"
                   placeholder="Acme Corp"
@@ -270,7 +313,7 @@ export default function AccountsPage() {
 
               <Field label="Industry">
                 <input
-                  value={form.industry ?? ""}
+                  value={form.industry}
                   onChange={(e) => setForm((f) => ({ ...f, industry: e.target.value }))}
                   className="w-full px-3 py-2 rounded-md border text-sm"
                   placeholder="Manufacturing"
@@ -279,36 +322,30 @@ export default function AccountsPage() {
 
               <Field label="Website">
                 <input
-                  value={form.website ?? ""}
+                  value={form.website}
                   onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))}
                   className="w-full px-3 py-2 rounded-md border text-sm"
                   placeholder="https://acme.example"
                 />
               </Field>
 
-              <Field label="Owner ID">
-                <input
-                  type="number"
-                  value={form.owner_id ?? ""}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      owner_id: e.target.value === "" ? null : Number(e.target.value),
-                    }))
-                  }
-                  className="w-full px-3 py-2 rounded-md border text-sm"
-                  placeholder="1"
-                />
-                {form.owner_name ? (
-                  <div className="text-xs text-gray-500 mt-1">
-                    Current owner: <b>{form.owner_name}</b>
-                  </div>
-                ) : null}
-              </Field>
+              {/* Owner readonly info */}
+              <div className="text-xs text-gray-500">
+                {editing ? (
+                  <>Owner: <b>{editing.owner_email ?? "—"}</b></>
+                ) : (
+                  <>Owner: <b>bu kaydı oluşturan kullanıcı</b> olacaktır.</>
+                )}
+              </div>
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setOpen(false)} className="px-3 py-1.5 rounded-md border hover:bg-gray-50">Cancel</button>
+              <button
+                onClick={() => setOpen(false)}
+                className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+              >
+                Cancel
+              </button>
               <button
                 disabled={!isValid}
                 onClick={onSave}

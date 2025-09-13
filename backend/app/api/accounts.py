@@ -11,7 +11,6 @@ from sqlalchemy import or_, func
 from ..models import Account
 from .deps import get_db, get_current_user, CurrentUser, require_permissions
 
-
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
@@ -25,14 +24,10 @@ class AccountBase(BaseModel):
     phone: Optional[str] = None
     billing_address: Optional[str] = None
     shipping_address: Optional[str] = None
-    owner_id: Optional[int] = Field(
-        default=None,
-        description="Varsayılan olarak current user id atanır (göndermezseniz)"
-    )
 
 
 class AccountCreate(AccountBase):
-    """Create gövdesi — AccountBase ile aynı."""
+    """Create gövdesi — FE owner göndermez; backend current user'ı owner yapar."""
     pass
 
 
@@ -45,11 +40,14 @@ class AccountUpdate(BaseModel):
     phone: Optional[str] = None
     billing_address: Optional[str] = None
     shipping_address: Optional[str] = None
+    # Not: owner_id sadece admin tarafından değiştirilebilir
     owner_id: Optional[int] = None
 
 
 class AccountOut(AccountBase):
     id: int
+    owner_id: Optional[int] = None
+    owner_email: Optional[str] = None
     created_at: Optional[datetime] = None
 
     class Config:
@@ -85,7 +83,7 @@ def _apply_search(qs, q: Optional[str]):
 def _apply_sort(qs, sort: Optional[str]):
     """
     sort param formatı:
-      - "created_at" (varsayılan: asc)
+      - "created_at" (varsayılan: desc)
       - "created_at:desc"
       - "name:asc" / "name:desc"
       - "id", "id:desc"
@@ -106,6 +104,32 @@ def _apply_sort(qs, sort: Optional[str]):
     except Exception:
         # hatalı format -> default
         return qs.order_by(Account.created_at.desc())
+
+
+def _serialize(acc: Account) -> AccountOut:
+    """SQLAlchemy Account -> AccountOut"""
+    return AccountOut.model_validate({
+        "id": acc.id,
+        "name": acc.name,
+        "industry": acc.industry,
+        "type": acc.type,
+        "website": acc.website,
+        "phone": acc.phone,
+        "billing_address": acc.billing_address,
+        "shipping_address": acc.shipping_address,
+        "owner_id": acc.owner_id,
+        "owner_email": getattr(getattr(acc, "owner", None), "email", None),
+        "created_at": acc.created_at,
+    })
+
+
+def _ensure_admin_or_owner(acc: Account, current: CurrentUser):
+    """Update/Delete için admin veya owner zorunluluğu."""
+    if current.role_name == "admin":
+        return
+    if acc.owner_id == current.id:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin or owner can modify this account")
 
 
 # ---------- Endpoints ----------
@@ -137,7 +161,7 @@ def list_accounts(
         .all()
     )
 
-    items = [AccountOut.model_validate(r) for r in rows]
+    items = [_serialize(r) for r in rows]
     meta = {
         "total": total,
         "page": page,
@@ -168,12 +192,12 @@ def create_account(
         phone=body.phone,
         billing_address=body.billing_address,
         shipping_address=body.shipping_address,
-        owner_id=body.owner_id or current.id,
+        owner_id=current.id,  # FE'den gelmez, backend atar
     )
     db.add(acc)
     db.commit()
     db.refresh(acc)
-    return AccountOut.model_validate(acc)
+    return _serialize(acc)
 
 
 @router.get(
@@ -197,7 +221,7 @@ def get_account(
     )
     if not acc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
-    return AccountOut.model_validate(acc)
+    return _serialize(acc)
 
 
 @router.patch(
@@ -223,12 +247,22 @@ def update_account(
     if not acc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    for k, v in body.model_dump(exclude_unset=True).items():
+    # Admin/Owner kısıtı
+    _ensure_admin_or_owner(acc, current)
+
+    data = body.model_dump(exclude_unset=True)
+
+    # owner_id değişikliği sadece admin'e izinli
+    if "owner_id" in data:
+        if current.role_name != "admin":
+            data.pop("owner_id", None)
+
+    for k, v in data.items():
         setattr(acc, k, v)
 
     db.commit()
     db.refresh(acc)
-    return AccountOut.model_validate(acc)
+    return _serialize(acc)
 
 
 @router.delete(
@@ -252,6 +286,9 @@ def delete_account(
     )
     if not acc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
+
+    # Admin/Owner kısıtı
+    _ensure_admin_or_owner(acc, current)
 
     db.delete(acc)
     db.commit()
