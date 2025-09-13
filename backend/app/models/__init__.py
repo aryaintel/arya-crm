@@ -80,6 +80,14 @@ class Account(Base):
     billing_address = Column(Text, nullable=True)
     shipping_address = Column(Text, nullable=True)
 
+    # --- Yeni (Salesforce benzeri) alanlar ---
+    account_number = Column(String(50), nullable=True)
+    employees = Column(Integer, nullable=True)
+    annual_revenue = Column(Integer, nullable=True)
+    rating = Column(String(20), nullable=True)        # Hot | Warm | Cold
+    ownership = Column(String(20), nullable=True)     # Public | Private | Other
+    description = Column(Text, nullable=True)
+
     owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
 
     created_at = Column(DateTime, server_default=func.now())

@@ -25,6 +25,14 @@ class AccountBase(BaseModel):
     billing_address: Optional[str] = None
     shipping_address: Optional[str] = None
 
+    # SF-benzeri alanlar
+    account_number: Optional[str] = None
+    employees: Optional[int] = None
+    annual_revenue: Optional[int] = None
+    rating: Optional[str] = Field(None, description="Hot | Warm | Cold (şimdilik serbest metin)")
+    ownership: Optional[str] = Field(None, description="Public | Private | Other (serbest)")
+    description: Optional[str] = None
+
 
 class AccountCreate(AccountBase):
     """Create gövdesi — FE owner göndermez; backend current user'ı owner yapar."""
@@ -40,6 +48,15 @@ class AccountUpdate(BaseModel):
     phone: Optional[str] = None
     billing_address: Optional[str] = None
     shipping_address: Optional[str] = None
+
+    # SF-benzeri alanlar
+    account_number: Optional[str] = None
+    employees: Optional[int] = None
+    annual_revenue: Optional[int] = None
+    rating: Optional[str] = None
+    ownership: Optional[str] = None
+    description: Optional[str] = None
+
     # Not: owner_id sadece admin tarafından değiştirilebilir
     owner_id: Optional[int] = None
 
@@ -63,7 +80,7 @@ _ALLOWED_SORTS: Dict[str, Any] = {
 }
 
 def _apply_search(qs, q: Optional[str]):
-    """Basit metin arama (name/website/phone/addresses)."""
+    """Basit metin arama (name/website/phone/addresses/account_number)."""
     if not q:
         return qs
     q_norm = (q or "").strip().lower()
@@ -76,6 +93,7 @@ def _apply_search(qs, q: Optional[str]):
             func.lower(Account.phone).contains(q_norm),
             func.lower(Account.billing_address).contains(q_norm),
             func.lower(Account.shipping_address).contains(q_norm),
+            func.lower(Account.account_number).contains(q_norm),
         )
     )
 
@@ -117,6 +135,15 @@ def _serialize(acc: Account) -> AccountOut:
         "phone": acc.phone,
         "billing_address": acc.billing_address,
         "shipping_address": acc.shipping_address,
+
+        # SF-benzeri alanlar
+        "account_number": acc.account_number,
+        "employees": acc.employees,
+        "annual_revenue": acc.annual_revenue,
+        "rating": acc.rating,
+        "ownership": acc.ownership,
+        "description": acc.description,
+
         "owner_id": acc.owner_id,
         "owner_email": getattr(getattr(acc, "owner", None), "email", None),
         "created_at": acc.created_at,
@@ -142,7 +169,7 @@ def _ensure_admin_or_owner(acc: Account, current: CurrentUser):
 def list_accounts(
     page: int = Query(1, ge=1, description="1-based page index"),
     size: int = Query(20, ge=1, le=100, description="Page size (max 100)"),
-    q: Optional[str] = Query(None, description="Search text (name/website/phone/address)"),
+    q: Optional[str] = Query(None, description="Search text (name/website/phone/address/account_number)"),
     sort: Optional[str] = Query(
         None,
         description='Sort by "id|name|created_at" + optional ":asc|desc", örn: "name:asc"'
@@ -192,6 +219,15 @@ def create_account(
         phone=body.phone,
         billing_address=body.billing_address,
         shipping_address=body.shipping_address,
+
+        # SF-benzeri alanlar
+        account_number=body.account_number,
+        employees=body.employees,
+        annual_revenue=body.annual_revenue,
+        rating=body.rating,
+        ownership=body.ownership,
+        description=body.description,
+
         owner_id=current.id,  # FE'den gelmez, backend atar
     )
     db.add(acc)
@@ -253,9 +289,8 @@ def update_account(
     data = body.model_dump(exclude_unset=True)
 
     # owner_id değişikliği sadece admin'e izinli
-    if "owner_id" in data:
-        if current.role_name != "admin":
-            data.pop("owner_id", None)
+    if "owner_id" in data and current.role_name != "admin":
+        data.pop("owner_id", None)
 
     for k, v in data.items():
         setattr(acc, k, v)
