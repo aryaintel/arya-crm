@@ -3,17 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
-from .api import auth, secure, accounts, contacts, deals, users  # ← users eklendi
+from .api import auth, accounts, contacts, deals, users, roles, secure  # roles ve secure importlu
 
 app = FastAPI(title="Arya CRM API")
-
 
 # ---------------------------
 # CORS (frontend için)
 # ---------------------------
-# settings.py içinde CORS_ALLOW_ORIGINS tanımlı değilse varsayılan olarak "*"
-allow_origins = getattr(settings, "CORS_ALLOW_ORIGINS", ["*"])
-
+# settings.CORS_ALLOW_ORIGINS varsa onu kullan; yoksa dev için localhost izinlerini ver
+allow_origins = getattr(
+    settings,
+    "CORS_ALLOW_ORIGINS",
+    ["http://localhost:5173", "http://127.0.0.1:5173"],
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -22,7 +24,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ---------------------------
 # Health & Current User
 # ---------------------------
@@ -30,7 +31,6 @@ app.add_middleware(
 def health():
     """Kubernetes/liveness probe için basit health check"""
     return {"status": "ok"}
-
 
 @app.get("/me", tags=["auth"])
 def me(current: CurrentUser = Depends(get_current_user)):
@@ -42,13 +42,11 @@ def me(current: CurrentUser = Depends(get_current_user)):
         "role": current.role_name,
     }
 
-
-# ---------------------------
-# Routers
-# ---------------------------
+## Routers
 app.include_router(auth.router)
-app.include_router(secure.router)
 app.include_router(accounts.router)
 app.include_router(contacts.router)
 app.include_router(deals.router)
-app.include_router(users.router)  # ← users router burada bağlandı
+app.include_router(users.router)
+app.include_router(roles.router)    # <— Hata veren satır; artık roles.router mevcut
+app.include_router(secure.router)

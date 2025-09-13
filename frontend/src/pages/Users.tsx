@@ -1,4 +1,4 @@
-// src/pages/Users.tsx
+// frontend/src/pages/Users.tsx
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
@@ -22,6 +22,8 @@ type UsersPayload = {
   };
 };
 
+type RoleRow = { id: number | string; name: string; permissions?: string | null };
+
 export default function UsersPage() {
   const [items, setItems] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,12 +38,16 @@ export default function UsersPage() {
   const [hasPrev, setHasPrev] = useState<boolean | undefined>();
   const [pages, setPages] = useState<number | undefined>();
 
+  // roles (lookup)
+  const [roles, setRoles] = useState<RoleRow[]>([]);
+  const roleNames = useMemo(() => roles.map((r) => r.name), [roles]);
+
   // modal state
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<User | null>(null);
   const [form, setForm] = useState<{
     email: string;
-    role_name: string;
+    role_name: string; // dropdown
     is_active: boolean;
     password: string; // create'de zorunlu, edit'te opsiyonel
   }>({
@@ -53,13 +59,35 @@ export default function UsersPage() {
 
   const isValid = useMemo(() => {
     const okEmail = /\S+@\S+\.\S+/.test(form.email);
-    if (editing) return okEmail;                   // edit: şifre opsiyonel
-    return okEmail && form.password.trim().length >= 6; // create: min 6
-  }, [form, editing]);
+    const okRole = !!form.role_name && roleNames.includes(form.role_name);
+    if (editing) return okEmail && okRole; // edit: şifre opsiyonel
+    return okEmail && okRole && form.password.trim().length >= 6; // create: min 6
+  }, [form, editing, roleNames]);
 
-  // Yardımcı URL’ler (hem /users/:id hem /users/:id/ denenir)
+  // Yardımcı URL’ler
   const byIdUrl = (id: number | string) => `/users/${id}/`;
   const byIdUrlNoSlash = (id: number | string) => `/users/${id}`;
+
+  // --- Roles fetch (lookup) ---
+  const fetchRoles = async () => {
+    try {
+      const data = await apiGet<RoleRow[] | { items?: RoleRow[] }>("/roles/");
+      const list = Array.isArray(data) ? data : (data.items ?? []);
+      list.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      setRoles(list);
+
+      // form default role: eğer boşsa 'member' / ilk rol
+      setForm((f) => ({
+        ...f,
+        role_name:
+          f.role_name ||
+          (list.find((r) => r.name === "member")?.name ??
+            (list[0]?.name || "")),
+      }));
+    } catch (e) {
+      console.error("roles load failed", e);
+    }
+  };
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -76,7 +104,6 @@ export default function UsersPage() {
       setTotal(payload.meta?.total);
       setPages(payload.meta?.pages);
 
-      // has_next / has_prev çıkarımı
       if (typeof payload.meta?.has_next === "boolean") {
         setHasNext(payload.meta.has_next);
       } else if (payload.meta?.pages) {
@@ -109,19 +136,15 @@ export default function UsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, pageSize]);
 
-  const onSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    setPage(1);
-    fetchUsers();
-  };
-
-  const onNew = () => {
+  // Modal açılmadan önce rol listesini yüklemek daha iyi UX
+  const onOpenNew = async () => {
     setEditing(null);
     setForm({ email: "", role_name: "", is_active: true, password: "" });
     setOpen(true);
+    await fetchRoles();
   };
 
-  const onEdit = (row: User) => {
+  const onOpenEdit = async (row: User) => {
     setEditing(row);
     setForm({
       email: row.email || "",
@@ -130,15 +153,22 @@ export default function UsersPage() {
       password: "",
     });
     setOpen(true);
+    await fetchRoles();
+  };
+
+  const onSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    setPage(1);
+    fetchUsers();
   };
 
   const onDelete = async (row: User) => {
     if (!confirm(`Delete user "${row.email}"?`)) return;
     try {
       try {
-        await apiDelete(byIdUrl(row.id));       // /users/:id/
+        await apiDelete(byIdUrl(row.id));
       } catch {
-        await apiDelete(byIdUrlNoSlash(row.id)); // /users/:id
+        await apiDelete(byIdUrlNoSlash(row.id));
       }
       await fetchUsers();
       alert("Deleted.");
@@ -155,16 +185,15 @@ export default function UsersPage() {
   const onSave = async () => {
     if (!isValid) return;
 
-    // Tek BİR payload: (önceden iki kere tanımlama hatası vardı)
     const basePayload: any = {
       email: form.email.trim().toLowerCase(),
-      role_name: form.role_name.trim() || "member",
+      role_name: form.role_name.trim(),
       is_active: form.is_active,
     };
     if (!editing) {
-      basePayload.password = form.password; // create: zorunlu
+      basePayload.password = form.password.trim();
     } else if (form.password.trim().length >= 6) {
-      basePayload.password = form.password.trim(); // edit: opsiyonel
+      basePayload.password = form.password.trim();
     }
 
     try {
@@ -213,8 +242,8 @@ export default function UsersPage() {
           </button>
           <button
             type="button"
-            onClick={onNew}
-            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+            onClick={onOpenNew}
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500 transition"
           >
             + New
           </button>
@@ -255,7 +284,7 @@ export default function UsersPage() {
                     </td>
                     <td className="py-2 pr-4 text-right">
                       <button
-                        onClick={() => onEdit(u)}
+                        onClick={() => onOpenEdit(u)}
                         className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
                       >
                         Edit
@@ -284,14 +313,14 @@ export default function UsersPage() {
               <button
                 disabled={hasPrev === false || page === 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 ‹ Prev
               </button>
               <button
                 disabled={hasNext === false}
                 onClick={() => setPage((p) => p + 1)}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50"
+                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Next ›
               </button>
@@ -320,12 +349,25 @@ export default function UsersPage() {
               </Field>
 
               <Field label="Role">
-                <input
+                <select
                   value={form.role_name}
                   onChange={(e) => setForm((f) => ({ ...f, role_name: e.target.value }))}
-                  className="w-full px-3 py-2 rounded-md border text-sm"
-                  placeholder="admin / member"
-                />
+                  className="w-full px-3 py-2 rounded-md border text-sm bg-white"
+                >
+                  <option value="" disabled>
+                    Select a role…
+                  </option>
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.name}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                {!roles.length && (
+                  <div className="text-xs text-amber-600 mt-1">
+                    No roles loaded. Open <b>Roles</b> page to create one.
+                  </div>
+                )}
               </Field>
 
               <Field label={editing ? "Password (leave empty to keep)" : "Password"}>
@@ -354,13 +396,16 @@ export default function UsersPage() {
             </div>
 
             <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setOpen(false)} className="px-3 py-1.5 rounded-md border hover:bg-gray-50">
+              <button
+                onClick={() => setOpen(false)}
+                className="px-3 py-1.5 rounded-md border hover:bg-gray-50 transition"
+              >
                 Cancel
               </button>
               <button
                 disabled={!isValid}
                 onClick={onSave}
-                className="px-3 py-1.5 rounded-md bg-indigo-600 text-white disabled:opacity-50"
+                className="px-3 py-1.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring focus-visible:ring-indigo-300 disabled:opacity-50 disabled:hover:bg-indigo-600 disabled:cursor-not-allowed transition"
               >
                 Save
               </button>

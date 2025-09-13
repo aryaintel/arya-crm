@@ -1,5 +1,4 @@
-// src/pages/Contacts.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type Contact = {
@@ -18,11 +17,6 @@ type Contact = {
 
 type ContactsPayload = {
   items: Contact[];
-  page?: number;
-  size?: number;
-  total?: number;
-  has_next?: boolean;
-  has_prev?: boolean;
   meta?: {
     page?: number;
     size?: number;
@@ -30,7 +24,14 @@ type ContactsPayload = {
     has_next?: boolean;
     has_prev?: boolean;
   };
+  page?: number;
+  size?: number;
+  total?: number;
+  has_next?: boolean;
+  has_prev?: boolean;
 };
+
+type AccountOption = { id: number; name: string };
 
 export default function ContactsPage() {
   const [items, setItems] = useState<Contact[]>([]);
@@ -44,7 +45,6 @@ export default function ContactsPage() {
   const [hasNext, setHasNext] = useState<boolean | undefined>();
   const [hasPrev, setHasPrev] = useState<boolean | undefined>();
 
-  // Modal / form
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Contact | null>(null);
   const [form, setForm] = useState({
@@ -54,12 +54,19 @@ export default function ContactsPage() {
     title: "",
     notes: "",
     account_id: "" as string | number | "",
-    owner_id: "" as string | number | "",
     account_name: "",
-    owner_name: "",
   });
 
-  const isValid = useMemo(() => (form.name || "").trim().length > 1, [form]);
+  // Account arama (tek alan: datalist)
+  const [accQuery, setAccQuery] = useState("");
+  const [accOptions, setAccOptions] = useState<AccountOption[]>([]);
+  const accTimer = useRef<number | null>(null);
+
+  const isValid = useMemo(() => {
+    const hasName = (form.name || "").trim().length > 1;
+    const hasAccount = form.account_id !== "" && form.account_id !== null;
+    return hasName && hasAccount;
+  }, [form]);
 
   const byIdUrl = (id: number | string) => `/contacts/${id}/`;
   const byIdUrlNoSlash = (id: number | string) => `/contacts/${id}`;
@@ -68,22 +75,17 @@ export default function ContactsPage() {
     setLoading(true);
     setError(null);
     try {
-      const qs = new URLSearchParams({
-        page: String(p),
-        size: String(size),
-      });
+      const qs = new URLSearchParams({ page: String(p), size: String(size) });
       if (search.trim()) qs.set("search", search.trim());
 
       const data = await apiGet<ContactsPayload>(`/contacts/?${qs.toString()}`);
 
-      // items: (obj.items) ya da doğrudan dizi gelebilir
       const list: Contact[] = Array.isArray((data as any).items)
         ? ((data as any).items as Contact[])
         : (Array.isArray(data as any) ? ((data as any) as Contact[]) : []);
 
       setItems(list);
 
-      // meta top-level ya da data.meta olabilir
       const meta = data.meta ?? data;
       setTotal(meta?.total);
       setHasNext(meta?.has_next);
@@ -102,10 +104,45 @@ export default function ContactsPage() {
     }
   };
 
+  // Account lookup (debounced)
+  const fetchAccounts = async (q: string) => {
+    try {
+      const qs = new URLSearchParams({ size: "20" });
+      if (q.trim()) qs.set("q", q.trim());
+      const res = await apiGet<{ items: AccountOption[] }>(`/accounts/?${qs.toString()}`);
+      const options = (res.items || []).map((a: any) => ({ id: a.id, name: a.name }));
+      setAccOptions(options);
+    } catch {
+      setAccOptions([]);
+    }
+  };
+
   useEffect(() => {
     fetchContacts(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    // modal açıldığında varsayılan öneriler
+    fetchAccounts("");
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (accTimer.current) window.clearTimeout(accTimer.current);
+    accTimer.current = window.setTimeout(() => fetchAccounts(accQuery), 300);
+  }, [accQuery, open]);
+
+  // datalist input'unda kullanıcı seçim yaptıkça ID eşle
+  const reconcileAccountId = (typed: string) => {
+    const exact = accOptions.find((o) => o.name.toLowerCase() === typed.trim().toLowerCase());
+    setForm((f) => ({
+      ...f,
+      account_name: typed,
+      account_id: exact ? String(exact.id) : "",
+    }));
+  };
 
   const onSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,10 +159,9 @@ export default function ContactsPage() {
       title: "",
       notes: "",
       account_id: "",
-      owner_id: "",
       account_name: "",
-      owner_name: "",
     });
+    setAccQuery("");
     setOpen(true);
   };
 
@@ -138,10 +174,9 @@ export default function ContactsPage() {
       title: c.title ?? "",
       notes: c.notes ?? "",
       account_id: (c.account_id ?? "").toString(),
-      owner_id: (c.owner_id ?? "").toString(),
       account_name: c.account_name ?? "",
-      owner_name: c.owner_name ?? "",
     });
+    setAccQuery(c.account_name ?? "");
     setOpen(true);
   };
 
@@ -177,10 +212,6 @@ export default function ContactsPage() {
         form.account_id === "" || form.account_id === null
           ? null
           : Number(form.account_id),
-      owner_id:
-        form.owner_id === "" || form.owner_id === null
-          ? null
-          : Number(form.owner_id),
     };
 
     try {
@@ -337,7 +368,7 @@ export default function ContactsPage() {
       {/* modal */}
       {open && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white w-[640px] max-w-[95vw] rounded-xl shadow p-5">
+          <div className="bg-white w-[680px] max-w-[95vw] rounded-xl shadow p-5">
             <div className="text-lg font-semibold mb-4">
               {editing ? "Edit Contact" : "New Contact"}
             </div>
@@ -349,6 +380,7 @@ export default function ContactsPage() {
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   className="w-full px-3 py-2 rounded-md border text-sm"
                   placeholder="Jane Doe"
+                  required
                 />
               </Field>
 
@@ -391,35 +423,37 @@ export default function ContactsPage() {
                 </Field>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Account ID">
-                  <input
-                    value={form.account_id}
-                    onChange={(e) => setForm((f) => ({ ...f, account_id: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                    placeholder="12"
-                  />
-                  {form.account_name ? (
-                    <div className="text-xs text-gray-500 mt-1">
-                      Current account: <b>{form.account_name}</b>
-                    </div>
-                  ) : null}
-                </Field>
-
-                <Field label="Owner ID">
-                  <input
-                    value={form.owner_id}
-                    onChange={(e) => setForm((f) => ({ ...f, owner_id: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                    placeholder="3"
-                  />
-                  {form.owner_name ? (
-                    <div className="text-xs text-gray-500 mt-1">
-                      Current owner: <b>{form.owner_name}</b>
-                    </div>
-                  ) : null}
-                </Field>
-              </div>
+              {/* Account (tek alan) */}
+              <Field label="Account (required)">
+                <input
+                  value={accQuery}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setAccQuery(v);
+                    reconcileAccountId(v);
+                  }}
+                  onBlur={(e) => reconcileAccountId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-md border text-sm"
+                  placeholder="Type to search and pick…"
+                  list="accounts-datalist"
+                />
+                <datalist id="accounts-datalist">
+                  {accOptions.map((a) => (
+                    <option key={a.id} value={a.name} />
+                  ))}
+                </datalist>
+                <div className="text-xs mt-1">
+                  {form.account_id ? (
+                    <span className="text-gray-600">
+                      Selected: <b>{form.account_name}</b> (ID: {String(form.account_id)})
+                    </span>
+                  ) : (
+                    <span className="text-red-600">
+                      Please pick an account from the suggestions.
+                    </span>
+                  )}
+                </div>
+              </Field>
             </div>
 
             <div className="mt-5 flex justify-end gap-2">

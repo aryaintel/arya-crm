@@ -1,6 +1,4 @@
-# backend/app/api/contacts.py
-
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, EmailStr, Field
@@ -10,7 +8,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from .deps import get_db, get_current_user, CurrentUser, require_permissions
-from ..models import Contact, Account
+from ..models import Contact, Account, User
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -47,8 +45,11 @@ class ContactOut(BaseModel):
     title: Optional[str] = None
     notes: Optional[str] = None
     owner_id: Optional[int] = None
-    created_at: Optional[datetime] = None   # <-- str yerine datetime
-    # updated_at: Optional[datetime] = None # modelde yoksa kaldır
+    created_at: Optional[datetime] = None
+
+    # Ek sahalar (liste/tekil için)
+    account_name: Optional[str] = None
+    owner_name: Optional[str] = None  # owner email
 
     class Config:
         from_attributes = True
@@ -81,6 +82,14 @@ def _ensure_account_in_tenant(db: Session, tenant_id: int, account_id: int) -> A
     return acc
 
 
+def _contact_row_to_out(row: Tuple[Contact, str, str]) -> ContactOut:
+    contact, account_name, owner_email = row
+    out = ContactOut.model_validate(contact)
+    out.account_name = account_name
+    out.owner_name = owner_email
+    return out
+
+
 # ---------------------------
 # Endpoints
 # ---------------------------
@@ -94,10 +103,23 @@ def list_contacts(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
     search: Optional[str] = Query(None, description="Search in name/email/phone"),
+    account_id: Optional[int] = Query(None, description="Filter by account id"),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
 ):
-    q = db.query(Contact).filter(Contact.tenant_id == current.tenant_id)
+    q = (
+        db.query(
+            Contact,
+            Account.name.label("account_name"),
+            User.email.label("owner_email"),
+        )
+        .join(Account, Contact.account_id == Account.id)
+        .join(User, Contact.owner_id == User.id)
+        .filter(Contact.tenant_id == current.tenant_id)
+    )
+
+    if account_id is not None:
+        q = q.filter(Contact.account_id == account_id)
 
     if search:
         like = f"%{search}%"
@@ -106,13 +128,14 @@ def list_contacts(
         )
 
     total = q.count()
-    items = (
+    rows = (
         q.order_by(Contact.id.desc())
         .offset((page - 1) * size)
         .limit(size)
         .all()
     )
 
+    items = [_contact_row_to_out(r) for r in rows]
     pages = (total + size - 1) // size if size else 1
 
     return ContactsListOut(
@@ -125,7 +148,8 @@ def list_contacts(
     "/",
     response_model=ContactOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permissions(["contacts:create"]))],
+    # İzin adı: write ile hizalandı (create yerine)
+    dependencies=[Depends(require_permissions(["contacts:write"]))],
 )
 def create_contact(
     body: ContactCreate,
@@ -143,7 +167,7 @@ def create_contact(
         phone=body.phone,
         title=body.title,
         notes=body.notes,
-        owner_id=current.id,  # NOT NULL / FK hatalarını önler
+        owner_id=current.id,  # current user owner olur
     )
 
     try:
@@ -154,7 +178,13 @@ def create_contact(
         db.rollback()
         raise HTTPException(status_code=409, detail="Contact violates a DB constraint") from e
 
-    return contact
+    # Tekil dönüşte de adları dolduralım
+    acc = db.query(Account.name).filter(Account.id == contact.account_id).scalar()
+    owner_email = db.query(User.email).filter(User.id == contact.owner_id).scalar()
+    out = ContactOut.model_validate(contact)
+    out.account_name = acc
+    out.owner_name = owner_email
+    return out
 
 
 @router.get(
@@ -167,14 +197,20 @@ def get_contact(
     db: Session = Depends(get_db),
     current: CurrentUser = Depends(get_current_user),
 ):
-    contact = (
-        db.query(Contact)
+    row = (
+        db.query(
+            Contact,
+            Account.name.label("account_name"),
+            User.email.label("owner_email"),
+        )
+        .join(Account, Contact.account_id == Account.id)
+        .join(User, Contact.owner_id == User.id)
         .filter(Contact.id == contact_id, Contact.tenant_id == current.tenant_id)
         .first()
     )
-    if not contact:
+    if not row:
         raise HTTPException(status_code=404, detail="Contact not found")
-    return contact
+    return _contact_row_to_out(row)
 
 
 @router.patch(
@@ -210,7 +246,12 @@ def update_contact(
         db.rollback()
         raise HTTPException(status_code=409, detail="Contact violates a DB constraint") from e
 
-    return contact
+    acc = db.query(Account.name).filter(Account.id == contact.account_id).scalar()
+    owner_email = db.query(User.email).filter(User.id == contact.owner_id).scalar()
+    out = ContactOut.model_validate(contact)
+    out.account_name = acc
+    out.owner_name = owner_email
+    return out
 
 
 @router.delete(

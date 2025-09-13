@@ -1,3 +1,4 @@
+// src/App.tsx
 import {
   NavLink,
   Routes,
@@ -18,6 +19,8 @@ import { apiGet, ApiError } from "./lib/api";
 import { clearToken, getToken, AUTH_EVENT } from "./lib/auth";
 
 const UsersPage = lazy(() => import("./pages/Users"));
+// Roles tekrar lazy — dosya yoksa bile uygulama genel olarak çalışır
+const RolesPage = lazy(() => import("./pages/Roles"));
 
 type Me = { id: number; email: string; role: "admin" | "member" };
 
@@ -27,6 +30,7 @@ function usePageTitle() {
   if (pathname.startsWith("/contacts")) return "Contacts";
   if (pathname.startsWith("/deals"))    return "Opportunities";
   if (pathname.startsWith("/users"))    return "Users";
+  if (pathname.startsWith("/roles"))    return "Roles";
   if (pathname.startsWith("/login"))    return "Login";
   return "Dashboard";
 }
@@ -43,7 +47,6 @@ export default function App() {
   const nav = useNavigate();
   const [me, setMe] = useState<Me | null>(null);
 
-  /** /me endpointini birden fazla olası path ile dener */
   const fetchMe = useCallback(async (token: string): Promise<Me> => {
     let lastErr: unknown;
     for (const p of ME_PATHS) {
@@ -51,12 +54,10 @@ export default function App() {
         return await apiGet<Me>(p, token);
       } catch (e) {
         lastErr = e;
-        // 404 ise diğer path'e geç; 401/403'te direkt fırlat (token geçersiz)
         if (e instanceof ApiError) {
           if (e.status === 401 || e.status === 403) throw e;
           if (e.status === 404) continue;
         }
-        // 0 (network) veya başka bir durum: sonradan üstte ele alınsın
         continue;
       }
     }
@@ -73,23 +74,17 @@ export default function App() {
       const data = await fetchMe(token);
       setMe(data ?? null);
     } catch (e) {
-      // Sadece 401/403'te oturumu sıfırla; diğer hatalarda token'ı koru
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
         clearToken();
         setMe(null);
       } else {
-        // me alınamadı ama token duruyor: UI'yı bozmadan bekle
         setMe(null);
       }
     }
   }, [fetchMe]);
 
-  // İlk yüklemede
-  useEffect(() => {
-    loadMe();
-  }, [loadMe]);
+  useEffect(() => { loadMe(); }, [loadMe]);
 
-  // Login/Logout gibi durumlarda
   useEffect(() => {
     const handler = () => loadMe();
     window.addEventListener(AUTH_EVENT, handler);
@@ -106,121 +101,60 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-gray-100 text-gray-900">
-      {/* Sidebar */}
       <aside className="w-64 bg-white border-r shadow-sm flex flex-col">
         <div className="h-16 flex items-center justify-center border-b font-bold text-indigo-600">
           Aryaintel CRM
         </div>
         <nav className="flex-1 p-4 space-y-2">
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
-            }
-          >
-            Dashboard
-          </NavLink>
-          <NavLink
-            to="/accounts"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
-            }
-          >
-            Accounts
-          </NavLink>
-          <NavLink
-            to="/contacts"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
-            }
-          >
-            Contacts
-          </NavLink>
-          <NavLink
-            to="/deals"
-            className={({ isActive }) =>
-              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
-            }
-          >
-            Opportunities
-          </NavLink>
+          <NavLink to="/" end className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Dashboard</NavLink>
+          <NavLink to="/accounts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Accounts</NavLink>
+          <NavLink to="/contacts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Contacts</NavLink>
+          <NavLink to="/deals" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Opportunities</NavLink>
           {isAdmin && (
-            <NavLink
-              to="/users"
-              className={({ isActive }) =>
-                `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`
-              }
-            >
-              Users
-            </NavLink>
+            <>
+              <NavLink to="/users" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Users</NavLink>
+              <NavLink to="/roles" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Roles</NavLink>
+            </>
           )}
         </nav>
       </aside>
 
-      {/* Main */}
       <div className="flex-1 flex flex-col">
-        {/* Header */}
         <header className="h-16 bg-white border-b shadow-sm flex items-center justify-between px-6">
           <h1 className="text-xl font-semibold">{title}</h1>
           <div className="flex items-center gap-3 text-sm text-gray-600">
             <span>{me ? `${me.email} (${me.role})` : "guest"}</span>
             {getToken() ? (
-              <button onClick={onLogout} className="px-2 py-1 rounded border hover:bg-gray-50">
-                Logout
-              </button>
+              <button onClick={onLogout} className="px-2 py-1 rounded border hover:bg-gray-50">Logout</button>
             ) : (
-              <NavLink to="/login" className="px-2 py-1 rounded border hover:bg-gray-50">
-                Login
-              </NavLink>
+              <NavLink to="/login" className="px-2 py-1 rounded border hover:bg-gray-50">Login</NavLink>
             )}
           </div>
         </header>
 
-        {/* Content */}
         <main className="flex-1 p-6">
           <Routes>
-            {/* Login korumasız */}
             <Route path="/login" element={<LoginPage />} />
-
-            <Route
-              path="/"
-              element={
-                <RequireAuth>
-                  <DashboardPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/accounts"
-              element={
-                <RequireAuth>
-                  <AccountsPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/contacts"
-              element={
-                <RequireAuth>
-                  <ContactsPage />
-                </RequireAuth>
-              }
-            />
-            <Route
-              path="/deals"
-              element={
-                <RequireAuth>
-                  <DealsPage />
-                </RequireAuth>
-              }
-            />
+            <Route path="/" element={<RequireAuth><DashboardPage /></RequireAuth>} />
+            <Route path="/accounts" element={<RequireAuth><AccountsPage /></RequireAuth>} />
+            <Route path="/contacts" element={<RequireAuth><ContactsPage /></RequireAuth>} />
+            <Route path="/deals" element={<RequireAuth><DealsPage /></RequireAuth>} />
             <Route
               path="/users"
               element={
                 <RequireAuth>
                   <Suspense fallback={<div className="text-sm text-gray-600">Loading…</div>}>
                     <UsersPage />
+                  </Suspense>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/roles"
+              element={
+                <RequireAuth>
+                  <Suspense fallback={<div className="text-sm text-gray-600">Loading…</div>}>
+                    <RolesPage />
                   </Suspense>
                 </RequireAuth>
               }
