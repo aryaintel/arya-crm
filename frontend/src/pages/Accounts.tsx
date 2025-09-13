@@ -6,7 +6,11 @@ type Account = {
   id: number | string;
   name: string;
   industry?: string | null;
+  type?: string | null;
   website?: string | null;
+  phone?: string | null;
+  billing_address?: string | null;
+  shipping_address?: string | null;
   owner_email?: string | null; // backend'den geliyor, sadece görüntüleme
 };
 
@@ -42,11 +46,19 @@ export default function AccountsPage() {
   const [form, setForm] = useState<{
     name: string;
     industry: string;
+    type: string;
     website: string;
+    phone: string;
+    billing_address: string;
+    shipping_address: string;
   }>({
     name: "",
     industry: "",
+    type: "",
     website: "",
+    phone: "",
+    billing_address: "",
+    shipping_address: "",
   });
 
   const isValid = useMemo(() => (form.name || "").trim().length > 1, [form]);
@@ -105,7 +117,15 @@ export default function AccountsPage() {
 
   const onNew = () => {
     setEditing(null);
-    setForm({ name: "", industry: "", website: "" });
+    setForm({
+      name: "",
+      industry: "",
+      type: "",
+      website: "",
+      phone: "",
+      billing_address: "",
+      shipping_address: "",
+    });
     setOpen(true);
   };
 
@@ -114,7 +134,11 @@ export default function AccountsPage() {
     setForm({
       name: row.name || "",
       industry: row.industry || "",
+      type: row.type || "",
       website: row.website || "",
+      phone: row.phone || "",
+      billing_address: row.billing_address || "",
+      shipping_address: row.shipping_address || "",
     });
     setOpen(true);
   };
@@ -146,7 +170,11 @@ export default function AccountsPage() {
     const payload = {
       name: form.name.trim(),
       industry: form.industry.trim() || null,
+      type: form.type.trim() || null,
       website: form.website.trim() || null,
+      phone: form.phone.trim() || null,
+      billing_address: form.billing_address.trim() || null,
+      shipping_address: form.shipping_address.trim() || null,
     };
 
     try {
@@ -296,7 +324,7 @@ export default function AccountsPage() {
       {/* modal */}
       {open && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white w-[520px] max-w-[92vw] rounded-xl shadow p-5">
+          <div className="bg-white w-[560px] max-w-[92vw] rounded-xl shadow p-5">
             <div className="text-lg font-semibold mb-4">
               {editing ? "Edit Account" : "New Account"}
             </div>
@@ -311,28 +339,70 @@ export default function AccountsPage() {
                 />
               </Field>
 
-              <Field label="Industry">
-                <input
-                  value={form.industry}
-                  onChange={(e) => setForm((f) => ({ ...f, industry: e.target.value }))}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Field label="Industry">
+                  <input
+                    value={form.industry}
+                    onChange={(e) => setForm((f) => ({ ...f, industry: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="Manufacturing"
+                  />
+                </Field>
+                <Field label="Type">
+                  <input
+                    value={form.type}
+                    onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="Customer / Partner…"
+                  />
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Field label="Website">
+                  <input
+                    value={form.website}
+                    onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="https://acme.example"
+                  />
+                </Field>
+                <Field label="Phone">
+                  <input
+                    value={form.phone}
+                    onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="+90 555 000 00 00"
+                  />
+                </Field>
+              </div>
+
+              <Field label="Billing Address">
+                <textarea
+                  value={form.billing_address}
+                  onChange={(e) => setForm((f) => ({ ...f, billing_address: e.target.value }))}
                   className="w-full px-3 py-2 rounded-md border text-sm"
-                  placeholder="Manufacturing"
+                  placeholder="Street, City, Zip, Country"
+                  rows={2}
                 />
               </Field>
 
-              <Field label="Website">
-                <input
-                  value={form.website}
-                  onChange={(e) => setForm((f) => ({ ...f, website: e.target.value }))}
+              <Field label="Shipping Address">
+                <textarea
+                  value={form.shipping_address}
+                  onChange={(e) => setForm((f) => ({ ...f, shipping_address: e.target.value }))}
                   className="w-full px-3 py-2 rounded-md border text-sm"
-                  placeholder="https://acme.example"
+                  placeholder="Street, City, Zip, Country"
+                  rows={2}
                 />
               </Field>
 
               {/* Owner readonly info */}
               <div className="text-xs text-gray-500">
                 {editing ? (
-                  <>Owner: <b>{editing.owner_email ?? "—"}</b></>
+                  <>
+                    Owner: <b>{editing.owner_email ?? "—"}</b>
+                  </>
                 ) : (
                   <>Owner: <b>bu kaydı oluşturan kullanıcı</b> olacaktır.</>
                 )}
