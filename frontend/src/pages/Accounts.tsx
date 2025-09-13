@@ -1,5 +1,6 @@
 // src/pages/Accounts.tsx
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
 type Account = {
@@ -11,6 +12,15 @@ type Account = {
   phone?: string | null;
   billing_address?: string | null;
   shipping_address?: string | null;
+
+  // SF-benzeri alanlar
+  account_number?: string | null;
+  employees?: number | null;
+  annual_revenue?: number | null;
+  rating?: string | null;       // Hot | Warm | Cold (şimdilik serbest metin)
+  ownership?: string | null;    // Public | Private | Other (serbest)
+  description?: string | null;
+
   owner_email?: string | null; // backend'den geliyor, sadece görüntüleme
 };
 
@@ -51,6 +61,13 @@ export default function AccountsPage() {
     phone: string;
     billing_address: string;
     shipping_address: string;
+
+    account_number: string;
+    employees: string;        // number inputundan okunuyor -> string tutup kaydederken number'a çeviriyoruz
+    annual_revenue: string;   // aynı mantık
+    rating: string;
+    ownership: string;
+    description: string;
   }>({
     name: "",
     industry: "",
@@ -59,6 +76,12 @@ export default function AccountsPage() {
     phone: "",
     billing_address: "",
     shipping_address: "",
+    account_number: "",
+    employees: "",
+    annual_revenue: "",
+    rating: "",
+    ownership: "",
+    description: "",
   });
 
   const isValid = useMemo(() => (form.name || "").trim().length > 1, [form]);
@@ -125,6 +148,12 @@ export default function AccountsPage() {
       phone: "",
       billing_address: "",
       shipping_address: "",
+      account_number: "",
+      employees: "",
+      annual_revenue: "",
+      rating: "",
+      ownership: "",
+      description: "",
     });
     setOpen(true);
   };
@@ -139,6 +168,13 @@ export default function AccountsPage() {
       phone: row.phone || "",
       billing_address: row.billing_address || "",
       shipping_address: row.shipping_address || "",
+
+      account_number: row.account_number || "",
+      employees: row.employees != null ? String(row.employees) : "",
+      annual_revenue: row.annual_revenue != null ? String(row.annual_revenue) : "",
+      rating: row.rating || "",
+      ownership: row.ownership || "",
+      description: row.description || "",
     });
     setOpen(true);
   };
@@ -167,7 +203,7 @@ export default function AccountsPage() {
     if (!isValid) return;
 
     // owner backend tarafından current user olarak atanır — gönderme!
-    const payload = {
+    const base = {
       name: form.name.trim(),
       industry: form.industry.trim() || null,
       type: form.type.trim() || null,
@@ -175,17 +211,24 @@ export default function AccountsPage() {
       phone: form.phone.trim() || null,
       billing_address: form.billing_address.trim() || null,
       shipping_address: form.shipping_address.trim() || null,
+
+      account_number: form.account_number.trim() || null,
+      employees: form.employees.trim() === "" ? null : Number(form.employees),
+      annual_revenue: form.annual_revenue.trim() === "" ? null : Number(form.annual_revenue),
+      rating: form.rating.trim() || null,
+      ownership: form.ownership.trim() || null,
+      description: form.description.trim() || null,
     };
 
     try {
       if (editing) {
         try {
-          await apiPatch(byIdUrl(editing.id), payload);
+          await apiPatch(byIdUrl(editing.id), base);
         } catch {
-          await apiPatch(byIdUrlNoSlash(editing.id), payload);
+          await apiPatch(byIdUrlNoSlash(editing.id), base);
         }
       } else {
-        await apiPost("/accounts/", payload);
+        await apiPost("/accounts/", base);
       }
       setOpen(false);
       await fetchAccounts();
@@ -208,7 +251,7 @@ export default function AccountsPage() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name, industry…"
+            placeholder="Search name, website, phone, account number…"
             className="px-3 py-1.5 rounded-md border text-sm w-64"
           />
           <button type="submit" className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
@@ -257,7 +300,11 @@ export default function AccountsPage() {
               <tbody>
                 {items.map((a) => (
                   <tr key={a.id} className="border-b last:border-0">
-                    <td className="py-2 pr-4 font-medium">{a.name}</td>
+                    <td className="py-2 pr-4 font-medium">
+                      <Link to={`/accounts/${a.id}`} className="text-indigo-600 hover:underline">
+                        {a.name}
+                      </Link>
+                    </td>
                     <td className="py-2 pr-4">{a.industry ?? "—"}</td>
                     <td className="py-2 pr-4">
                       {a.website ? (
@@ -324,7 +371,7 @@ export default function AccountsPage() {
       {/* modal */}
       {open && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="bg-white w-[560px] max-w-[92vw] rounded-xl shadow p-5">
+          <div className="bg-white w-[760px] max-w-[95vw] rounded-xl shadow p-5">
             <div className="text-lg font-semibold mb-4">
               {editing ? "Edit Account" : "New Account"}
             </div>
@@ -377,6 +424,54 @@ export default function AccountsPage() {
                 </Field>
               </div>
 
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <Field label="Account Number">
+                  <input
+                    value={form.account_number}
+                    onChange={(e) => setForm((f) => ({ ...f, account_number: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="AC-00123"
+                  />
+                </Field>
+                <Field label="Employees">
+                  <input
+                    type="number"
+                    value={form.employees}
+                    onChange={(e) => setForm((f) => ({ ...f, employees: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="250"
+                  />
+                </Field>
+                <Field label="Annual Revenue">
+                  <input
+                    type="number"
+                    value={form.annual_revenue}
+                    onChange={(e) => setForm((f) => ({ ...f, annual_revenue: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="1000000"
+                  />
+                </Field>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Field label="Rating">
+                  <input
+                    value={form.rating}
+                    onChange={(e) => setForm((f) => ({ ...f, rating: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="Hot / Warm / Cold"
+                  />
+                </Field>
+                <Field label="Ownership">
+                  <input
+                    value={form.ownership}
+                    onChange={(e) => setForm((f) => ({ ...f, ownership: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-md border text-sm"
+                    placeholder="Public / Private / Other"
+                  />
+                </Field>
+              </div>
+
               <Field label="Billing Address">
                 <textarea
                   value={form.billing_address}
@@ -397,12 +492,20 @@ export default function AccountsPage() {
                 />
               </Field>
 
+              <Field label="Description">
+                <textarea
+                  value={form.description}
+                  onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-md border text-sm"
+                  placeholder="Notes / background…"
+                  rows={3}
+                />
+              </Field>
+
               {/* Owner readonly info */}
               <div className="text-xs text-gray-500">
                 {editing ? (
-                  <>
-                    Owner: <b>{editing.owner_email ?? "—"}</b>
-                  </>
+                  <>Owner: <b>{editing.owner_email ?? "—"}</b></>
                 ) : (
                   <>Owner: <b>bu kaydı oluşturan kullanıcı</b> olacaktır.</>
                 )}
