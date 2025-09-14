@@ -32,6 +32,7 @@ const RESOURCES = [
   "accounts",
   "contacts",
   "deals",
+  "leads",     // ← EKLENDİ
   "users",
   "roles",
   "secure",

@@ -3,7 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
-from .api import auth, accounts, contacts, deals, users, roles, secure  # roles ve secure importlu
+from .api import (
+    auth,
+    accounts,
+    contacts,
+    deals,
+    users,
+    roles,
+    secure,
+    leads,   # ← yeni eklenen import
+)
 
 app = FastAPI(title="Arya CRM API")
 
@@ -32,6 +41,7 @@ def health():
     """Kubernetes/liveness probe için basit health check"""
     return {"status": "ok"}
 
+
 @app.get("/me", tags=["auth"])
 def me(current: CurrentUser = Depends(get_current_user)):
     """Token doğrulandıktan sonra mevcut kullanıcı bilgilerini döner"""
@@ -42,11 +52,15 @@ def me(current: CurrentUser = Depends(get_current_user)):
         "role": current.role_name,
     }
 
-## Routers
+
+# ---------------------------
+# Routers
+# ---------------------------
 app.include_router(auth.router)
 app.include_router(accounts.router)
 app.include_router(contacts.router)
 app.include_router(deals.router)
 app.include_router(users.router)
-app.include_router(roles.router)    # <— Hata veren satır; artık roles.router mevcut
+app.include_router(roles.router)
 app.include_router(secure.router)
+app.include_router(leads.router)   # ← yeni eklenen router

@@ -14,9 +14,10 @@ import AccountsPage from "./pages/Accounts";
 import AccountDetailPage from "./pages/AccountDetail";
 import ContactsPage from "./pages/Contacts";
 import DealsPage from "./pages/Deals";
-import OpportunityDetailPage from "./pages/OpportunityDetail"; // ← NEW
+import OpportunityDetailPage from "./pages/OpportunityDetail";
+import LeadsPage from "./pages/Leads";            // ← NEW
 import LoginPage from "./pages/Login";
-
+import LeadDetailPage from "./pages/LeadDetail";   // ← NEW
 import { apiGet, ApiError } from "./lib/api";
 import { clearToken, getToken, AUTH_EVENT } from "./lib/auth";
 
@@ -29,6 +30,7 @@ function usePageTitle() {
   const { pathname } = useLocation();
   if (pathname.startsWith("/accounts")) return "Accounts";
   if (pathname.startsWith("/contacts")) return "Contacts";
+  if (pathname.startsWith("/leads")) return "Leads";           // ← NEW
   if (pathname.startsWith("/deals")) return "Opportunities";
   if (pathname.startsWith("/users")) return "Users";
   if (pathname.startsWith("/roles")) return "Roles";
@@ -110,6 +112,7 @@ export default function App() {
           <NavLink to="/" end className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Dashboard</NavLink>
           <NavLink to="/accounts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Accounts</NavLink>
           <NavLink to="/contacts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Contacts</NavLink>
+          <NavLink to="/leads" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Leads</NavLink> {/* ← NEW */}
           <NavLink to="/deals" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Opportunities</NavLink>
           {isAdmin && (
             <>
@@ -140,8 +143,10 @@ export default function App() {
             <Route path="/accounts" element={<RequireAuth><AccountsPage /></RequireAuth>} />
             <Route path="/accounts/:id" element={<RequireAuth><AccountDetailPage /></RequireAuth>} />
             <Route path="/contacts" element={<RequireAuth><ContactsPage /></RequireAuth>} />
+            <Route path="/leads" element={<RequireAuth><LeadsPage /></RequireAuth>} /> {/* ← NEW */}
             <Route path="/deals" element={<RequireAuth><DealsPage /></RequireAuth>} />
-            <Route path="/deals/:id" element={<RequireAuth><OpportunityDetailPage /></RequireAuth>} /> {/* NEW */}
+            <Route path="/deals/:id" element={<RequireAuth><OpportunityDetailPage /></RequireAuth>} />
+            <Route path="/leads/:id" element={<RequireAuth><LeadDetailPage /></RequireAuth>} />  {/* NEW */}
             <Route
               path="/users"
               element={

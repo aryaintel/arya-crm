@@ -118,6 +118,46 @@ class Contact(Base):
     owner   = relationship("User", lazy="selectin")
 
 
+# --------- NEW: Leads ---------
+class Lead(Base):
+    """
+    Basit Lead modeli (Salesforce yaklaşımı):
+      - henüz Account/Contact/Opportunity'ye dönüşmemiş adaylar
+      - Convert sonrası referans id’leri saklanır (soft link)
+    """
+    __tablename__ = "leads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    owner_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
+
+    # Kim bu lead?
+    name   = Column(String, nullable=False)       # kişi adı veya temas adı
+    company = Column(String, nullable=True)
+    email  = Column(String, nullable=True)
+    phone  = Column(String, nullable=True)
+    title  = Column(String, nullable=True)
+
+    # Satış nitelikleri
+    status = Column(String, nullable=True)        # New, Working, Nurturing, Unqualified, Converted
+    source = Column(String, nullable=True)        # Referral, Web, Event...
+    rating = Column(String, nullable=True)        # Hot, Warm, Cold
+    notes  = Column(Text,   nullable=True)
+
+    # Convert meta
+    converted_account_id     = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    converted_opportunity_id = Column(Integer, ForeignKey("opportunities.id"), nullable=True)
+    converted_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    # ilişkiler
+    owner = relationship("User", lazy="selectin")
+    converted_account = relationship("Account", lazy="selectin", foreign_keys=[converted_account_id])
+    converted_opportunity = relationship("Opportunity", lazy="selectin", foreign_keys=[converted_opportunity_id])
+
+
 # --------- Business Tables: Deals (Pipeline / Stage / Opportunity) ---------
 class Pipeline(Base):
     __tablename__ = "pipelines"
