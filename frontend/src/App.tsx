@@ -7,7 +7,14 @@ import {
   Navigate,
   useNavigate,
 } from "react-router-dom";
-import { Suspense, lazy, useEffect, useState, useCallback } from "react";
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useState,
+  useCallback,
+  type ReactNode,
+} from "react";
 
 import DashboardPage from "./pages/Dashboard";
 import AccountsPage from "./pages/Accounts";
@@ -15,9 +22,14 @@ import AccountDetailPage from "./pages/AccountDetail";
 import ContactsPage from "./pages/Contacts";
 import DealsPage from "./pages/Deals";
 import OpportunityDetailPage from "./pages/OpportunityDetail";
-import LeadsPage from "./pages/Leads";            // ← NEW
+import LeadsPage from "./pages/Leads";
 import LoginPage from "./pages/Login";
-import LeadDetailPage from "./pages/LeadDetail";   // ← NEW
+import LeadDetailPage from "./pages/LeadDetail";
+
+// NEW
+import BusinessCasePage from "./pages/BusinessCase";
+import ScenarioPage from "./pages/Scenario";
+
 import { apiGet, ApiError } from "./lib/api";
 import { clearToken, getToken, AUTH_EVENT } from "./lib/auth";
 
@@ -30,17 +42,19 @@ function usePageTitle() {
   const { pathname } = useLocation();
   if (pathname.startsWith("/accounts")) return "Accounts";
   if (pathname.startsWith("/contacts")) return "Contacts";
-  if (pathname.startsWith("/leads")) return "Leads";           // ← NEW
+  if (pathname.startsWith("/leads")) return "Leads";
   if (pathname.startsWith("/deals")) return "Opportunities";
+  if (pathname.startsWith("/business-cases")) return "Business Cases";
+  if (pathname.startsWith("/scenarios")) return "Scenario";
   if (pathname.startsWith("/users")) return "Users";
   if (pathname.startsWith("/roles")) return "Roles";
   if (pathname.startsWith("/login")) return "Login";
   return "Dashboard";
 }
 
-function RequireAuth({ children }: { children: JSX.Element }) {
+function RequireAuth({ children }: { children: ReactNode }) {
   if (!getToken()) return <Navigate to="/login" replace />;
-  return children;
+  return <>{children}</>;
 }
 
 const ME_PATHS = ["/auth/me", "/me", "/users/me"] as const;
@@ -64,7 +78,10 @@ export default function App() {
         continue;
       }
     }
-    throw lastErr ?? new ApiError(404, "me endpoint not found");
+    // ApiError imzası: (status: number, message: string)
+    throw lastErr instanceof ApiError
+      ? lastErr
+      : new ApiError(404, "me endpoint not found");
   }, []);
 
   const loadMe = useCallback(async () => {
@@ -86,7 +103,9 @@ export default function App() {
     }
   }, [fetchMe]);
 
-  useEffect(() => { loadMe(); }, [loadMe]);
+  useEffect(() => {
+    loadMe();
+  }, [loadMe]);
 
   useEffect(() => {
     const handler = () => loadMe();
@@ -109,15 +128,80 @@ export default function App() {
           Aryaintel CRM
         </div>
         <nav className="flex-1 p-4 space-y-2">
-          <NavLink to="/" end className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Dashboard</NavLink>
-          <NavLink to="/accounts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Accounts</NavLink>
-          <NavLink to="/contacts" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Contacts</NavLink>
-          <NavLink to="/leads" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Leads</NavLink> {/* ← NEW */}
-          <NavLink to="/deals" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Opportunities</NavLink>
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                isActive ? "bg-indigo-100 text-indigo-700" : ""
+              }`
+            }
+          >
+            Dashboard
+          </NavLink>
+          <NavLink
+            to="/accounts"
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                isActive ? "bg-indigo-100 text-indigo-700" : ""
+              }`
+            }
+          >
+            Accounts
+          </NavLink>
+          <NavLink
+            to="/contacts"
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                isActive ? "bg-indigo-100 text-indigo-700" : ""
+              }`
+            }
+          >
+            Contacts
+          </NavLink>
+          <NavLink
+            to="/leads"
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                isActive ? "bg-indigo-100 text-indigo-700" : ""
+              }`
+            }
+          >
+            Leads
+          </NavLink>
+          <NavLink
+            to="/deals"
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                isActive ? "bg-indigo-100 text-indigo-700" : ""
+              }`
+            }
+          >
+            Opportunities
+          </NavLink>
+          {/* Business Case / Scenario için ana menü linki yok; detay sayfalarından gidiliyor */}
           {isAdmin && (
             <>
-              <NavLink to="/users" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Users</NavLink>
-              <NavLink to="/roles" className={({ isActive }) => `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${isActive ? "bg-indigo-100 text-indigo-700" : ""}`}>Roles</NavLink>
+              <NavLink
+                to="/users"
+                className={({ isActive }) =>
+                  `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                    isActive ? "bg-indigo-100 text-indigo-700" : ""
+                  }`
+                }
+              >
+                Users
+              </NavLink>
+              <NavLink
+                to="/roles"
+                className={({ isActive }) =>
+                  `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                    isActive ? "bg-indigo-100 text-indigo-700" : ""
+                  }`
+                }
+              >
+                Roles
+              </NavLink>
             </>
           )}
         </nav>
@@ -129,9 +213,16 @@ export default function App() {
           <div className="flex items-center gap-3 text-sm text-gray-600">
             <span>{me ? `${me.email} (${me.role})` : "guest"}</span>
             {getToken() ? (
-              <button onClick={onLogout} className="px-2 py-1 rounded border hover:bg-gray-50">Logout</button>
+              <button
+                onClick={onLogout}
+                className="px-2 py-1 rounded border hover:bg-gray-50"
+              >
+                Logout
+              </button>
             ) : (
-              <NavLink to="/login" className="px-2 py-1 rounded border hover:bg-gray-50">Login</NavLink>
+              <NavLink to="/login" className="px-2 py-1 rounded border hover:bg-gray-50">
+                Login
+              </NavLink>
             )}
           </div>
         </header>
@@ -139,14 +230,91 @@ export default function App() {
         <main className="flex-1 p-6">
           <Routes>
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/" element={<RequireAuth><DashboardPage /></RequireAuth>} />
-            <Route path="/accounts" element={<RequireAuth><AccountsPage /></RequireAuth>} />
-            <Route path="/accounts/:id" element={<RequireAuth><AccountDetailPage /></RequireAuth>} />
-            <Route path="/contacts" element={<RequireAuth><ContactsPage /></RequireAuth>} />
-            <Route path="/leads" element={<RequireAuth><LeadsPage /></RequireAuth>} /> {/* ← NEW */}
-            <Route path="/deals" element={<RequireAuth><DealsPage /></RequireAuth>} />
-            <Route path="/deals/:id" element={<RequireAuth><OpportunityDetailPage /></RequireAuth>} />
-            <Route path="/leads/:id" element={<RequireAuth><LeadDetailPage /></RequireAuth>} />  {/* NEW */}
+
+            <Route
+              path="/"
+              element={
+                <RequireAuth>
+                  <DashboardPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/accounts"
+              element={
+                <RequireAuth>
+                  <AccountsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/accounts/:id"
+              element={
+                <RequireAuth>
+                  <AccountDetailPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/contacts"
+              element={
+                <RequireAuth>
+                  <ContactsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/leads"
+              element={
+                <RequireAuth>
+                  <LeadsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/deals"
+              element={
+                <RequireAuth>
+                  <DealsPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/deals/:id"
+              element={
+                <RequireAuth>
+                  <OpportunityDetailPage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/leads/:id"
+              element={
+                <RequireAuth>
+                  <LeadDetailPage />
+                </RequireAuth>
+              }
+            />
+
+            {/* NEW: Business Case & Scenario detay rotaları */}
+            <Route
+              path="/business-cases/:businessCaseId"
+              element={
+                <RequireAuth>
+                  <BusinessCasePage />
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/scenarios/:scenarioId"
+              element={
+                <RequireAuth>
+                  <ScenarioPage />
+                </RequireAuth>
+              }
+            />
+
+            {/* Lazy admin sayfaları */}
             <Route
               path="/users"
               element={

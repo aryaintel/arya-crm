@@ -1,4 +1,3 @@
-# backend/app/models/__init__.py
 from sqlalchemy import (
     Column,
     Integer,
@@ -9,6 +8,8 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     func,
+    Numeric,
+    Boolean,
 )
 from sqlalchemy.orm import declarative_base, relationship
 from ..core.config import engine
@@ -210,6 +211,90 @@ class Opportunity(Base):
     # (isteğe bağlı) ilişkiler:
     account = relationship("Account", lazy="selectin")
     owner   = relationship("User", lazy="selectin")
+
+    # 1:1 ilişki (BusinessCase tarafında UNIQUE kısıtı var)
+    business_case = relationship("BusinessCase", uselist=False, back_populates="opportunity", lazy="selectin")
+
+
+# --------- NEW: Business Case / Scenario Modelleme ---------
+class BusinessCase(Base):
+    __tablename__ = "business_cases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    opportunity_id = Column(Integer, ForeignKey("opportunities.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+
+    # ilişkiler
+    opportunity = relationship("Opportunity", back_populates="business_case", lazy="selectin")
+    scenarios = relationship(
+        "Scenario", back_populates="business_case",
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class Scenario(Base):
+    __tablename__ = "scenarios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    business_case_id = Column(Integer, ForeignKey("business_cases.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    months = Column(Integer, nullable=False, default=36)
+    start_date = Column(Date, nullable=False)
+
+    # ilişkiler
+    business_case = relationship("BusinessCase", back_populates="scenarios", lazy="selectin")
+    products = relationship(
+        "ScenarioProduct", back_populates="scenario",
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+    overheads = relationship(
+        "ScenarioOverhead", back_populates="scenario",
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class ScenarioProduct(Base):
+    __tablename__ = "scenario_products"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    price = Column(Numeric(18, 4), nullable=False, default=0)
+    unit_cogs = Column(Numeric(18, 4), nullable=False, default=0)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # ilişkiler
+    scenario = relationship("Scenario", back_populates="products", lazy="selectin")
+    months = relationship(
+        "ScenarioProductMonth", back_populates="product",
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class ScenarioProductMonth(Base):
+    __tablename__ = "scenario_product_months"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_product_id = Column(Integer, ForeignKey("scenario_products.id"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)  # 1..12
+    quantity = Column(Numeric(18, 4), nullable=False, default=0)
+
+    # ilişkiler
+    product = relationship("ScenarioProduct", back_populates="months", lazy="selectin")
+
+
+class ScenarioOverhead(Base):
+    __tablename__ = "scenario_overheads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    type = Column(String(20), nullable=False)          # 'fixed' | '%_revenue'
+    amount = Column(Numeric(18, 4), nullable=False, default=0)
+
+    # ilişkiler
+    scenario = relationship("Scenario", back_populates="overheads", lazy="selectin")
 
 
 # --------- Create Tables (if not exist) ---------

@@ -11,7 +11,9 @@ from .api import (
     users,
     roles,
     secure,
-    leads,   # ← yeni eklenen import
+    leads,
+    business_cases,         # Business Case & Scenario API
+    scenario_overheads,     # ← yeni: Overhead API
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -63,4 +65,6 @@ app.include_router(deals.router)
 app.include_router(users.router)
 app.include_router(roles.router)
 app.include_router(secure.router)
-app.include_router(leads.router)   # ← yeni eklenen router
+app.include_router(leads.router)
+app.include_router(business_cases.router)
+app.include_router(scenario_overheads.router)  # ← eklendi

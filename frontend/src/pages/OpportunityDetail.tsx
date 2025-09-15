@@ -1,6 +1,7 @@
+// src/pages/OpportunityDetail.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { apiGet, ApiError } from "../lib/api";
+import { apiGet, apiPost, ApiError } from "../lib/api";
 
 type Opportunity = {
   id: number;
@@ -20,10 +21,27 @@ type Opportunity = {
 
   created_at?: string | null;
   updated_at?: string | null;
+
+  /** 1:1 Business Case bağı (bazı kayıtlarda null dönebilir) */
+  business_case_id?: number | null;
 };
 
 // /deals/stages -> { id, no, name }
 type StageRow = { id: number; no: number; name: string };
+
+type ScenarioRow = {
+  id: number;
+  name: string;
+  months: number;
+  start_date: string; // ISO
+};
+
+type BusinessCaseOut = {
+  id: number;
+  opportunity_id: number;
+  name: string;
+  scenarios?: ScenarioRow[];
+};
 
 export default function OpportunityDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,11 +51,46 @@ export default function OpportunityDetailPage() {
   const [stages, setStages] = useState<StageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Business Case + senaryolar
+  const [bc, setBc] = useState<BusinessCaseOut | null>(null);
+  const [bcLoading, setBcLoading] = useState(false);
 
   const currentStage = useMemo(
     () => (opp ? stages.find((s) => s.id === opp.stage_id) : undefined),
     [opp, stages]
   );
+
+  // BC detayını id ile çek
+  const fetchBC = async (bcId: number) => {
+    setBcLoading(true);
+    try {
+      const data = await apiGet<BusinessCaseOut>(`/business-cases/${bcId}`);
+      setBc(data ?? null);
+    } catch {
+      setBc(null);
+    } finally {
+      setBcLoading(false);
+    }
+  };
+
+  // Opp üzerinden BC bul (opp.business_case_id gelmese bile)
+  const fetchBCByOpp = async (oppId: number) => {
+    setBcLoading(true);
+    try {
+      const data = await apiGet<BusinessCaseOut>(
+        `/business-cases/by-opportunity/${oppId}`
+      );
+      setBc(data ?? null);
+      // Opp objesini bc id ile zenginleştir
+      setOpp((prev) => (prev ? { ...prev, business_case_id: data.id } : prev));
+    } catch {
+      setBc(null);
+    } finally {
+      setBcLoading(false);
+    }
+  };
 
   const fetchAll = async () => {
     if (!id) return;
@@ -50,6 +103,13 @@ export default function OpportunityDetailPage() {
       ]);
       setOpp(data);
       setStages(Array.isArray(st) ? st : []);
+
+      // Önce opp üzerinde bcId varsa onunla çek, yoksa opp'tan dene (mevcut BC olsa bile null olabilir)
+      if (data?.business_case_id) {
+        await fetchBC(Number(data.business_case_id));
+      } else {
+        await fetchBCByOpp(data.id).catch(() => setBc(null));
+      }
     } catch (e: any) {
       const msg =
         (e instanceof ApiError && e.message) ||
@@ -67,9 +127,55 @@ export default function OpportunityDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  /** Create Business Case — varsa 409'u sessizce karşıla, mevcut BC'yi yükle */
+  const onCreateBusinessCase = async () => {
+    if (!opp) return;
+    try {
+      setBusy(true);
+
+      // Zaten biliyorsak bu sayfada güncelleyelim
+      if (opp.business_case_id) {
+        await fetchBC(Number(opp.business_case_id));
+        return;
+      }
+
+      // Oluşturmayı dene
+      await apiPost<BusinessCaseOut>("/business-cases/", {
+        opportunity_id: opp.id,
+        name: `${opp.name} BC`,
+      });
+
+      // Oluşturuldu -> bu sayfada gösterelim
+      await fetchBCByOpp(opp.id);
+    } catch (e) {
+      // 409: zaten var -> mevcut BC'yi çek ve göster
+      if (e instanceof ApiError && e.status === 409) {
+        await fetchBCByOpp(opp.id);
+        return;
+      }
+      alert(
+        (e instanceof ApiError && e.message) ||
+          (e as any)?.response?.data?.detail ||
+          (e as any)?.message ||
+          "Failed to create Business Case"
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onViewBC = () => {
+    if (bc?.id) navigate(`/business-cases/${bc.id}`);
+  };
+  const onEditBC = () => {
+    if (bc?.id) navigate(`/business-cases/${bc.id}?edit=1`);
+  };
+
+  const shownBusinessCaseId = bc?.id ?? opp?.business_case_id ?? null;
+
   return (
     <div className="space-y-4">
-      {/* Header */}
+      {/* Header (sadece navigasyon + geri dön) */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <div className="text-xs text-gray-500">
@@ -96,68 +202,169 @@ export default function OpportunityDetailPage() {
       {loading && <div className="text-sm text-gray-500">Loading opportunity…</div>}
       {err && <div className="text-sm text-red-600">Error: {err}</div>}
 
-      {/* Content */}
+      {/* Üst detaylar */}
       {!loading && !err && opp && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* LEFT — Pipeline + Overview */}
-          <div className="lg:col-span-2 space-y-4">
-            {/* Pipeline */}
-            <div className="bg-white rounded-xl shadow p-5">
-              <div className="text-lg font-medium mb-4">Pipeline</div>
-              <PipelineArrows stages={stages} currentStageId={opp.stage_id} />
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {/* LEFT — Pipeline + Overview */}
+            <div className="lg:col-span-2 space-y-4">
+              {/* Pipeline */}
+              <div className="bg-white rounded-xl shadow p-5">
+                <div className="text-lg font-medium mb-4">Pipeline</div>
+                <PipelineArrows stages={stages} currentStageId={opp.stage_id} />
+              </div>
+
+              {/* Overview */}
+              <div className="bg-white rounded-xl shadow p-5">
+                <div className="text-lg font-medium mb-4">Overview</div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                  <KV label="Account" value={opp.account_name ?? opp.account_id} />
+                  <KV label="Owner" value={opp.owner_email ?? opp.owner_id} />
+                  <KV
+                    label="Amount"
+                    value={opp.amount != null ? opp.amount.toLocaleString() : "—"}
+                  />
+                  <KV label="Currency" value={opp.currency ?? "—"} />
+                  <KV
+                    label="Expected Close"
+                    value={
+                      opp.expected_close_date
+                        ? new Date(opp.expected_close_date).toLocaleDateString()
+                        : "—"
+                    }
+                  />
+                  <KV label="Source" value={opp.source ?? "—"} />
+                </div>
+              </div>
             </div>
 
-            {/* Overview */}
+            {/* RIGHT — Opportunity Info */}
             <div className="bg-white rounded-xl shadow p-5">
-              <div className="text-lg font-medium mb-4">Overview</div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                <KV label="Account" value={opp.account_name ?? opp.account_id} />
-                <KV label="Owner" value={opp.owner_email ?? opp.owner_id} />
+              <div className="text-lg font-medium mb-4">Opportunity Info</div>
+              <div className="text-sm space-y-2">
+                <KV label="Stage" value={currentStage?.name ?? "—"} />
                 <KV
-                  label="Amount"
-                  value={opp.amount != null ? opp.amount.toLocaleString() : "—"}
+                  label="Created"
+                  value={opp.created_at ? new Date(opp.created_at).toLocaleString() : "—"}
                 />
-                <KV label="Currency" value={opp.currency ?? "—"} />
                 <KV
-                  label="Expected Close"
+                  label="Updated"
+                  value={opp.updated_at ? new Date(opp.updated_at).toLocaleString() : "—"}
+                />
+                <KV label="Opportunity ID" value={String(opp.id)} />
+                <KV
+                  label="Business Case"
                   value={
-                    opp.expected_close_date
-                      ? new Date(opp.expected_close_date).toLocaleDateString()
-                      : "—"
+                    shownBusinessCaseId ? (
+                      <Link
+                        to={`/business-cases/${shownBusinessCaseId}`}
+                        className="text-indigo-600 hover:underline"
+                      >
+                        #{shownBusinessCaseId}
+                      </Link>
+                    ) : (
+                      "—"
+                    )
                   }
                 />
-                <KV label="Source" value={opp.source ?? "—"} />
               </div>
             </div>
           </div>
 
-          {/* RIGHT — Meta */}
+          {/* ALT — Business Case & Scenarios bölümü */}
           <div className="bg-white rounded-xl shadow p-5">
-            <div className="text-lg font-medium mb-4">Opportunity Info</div>
-            <div className="text-sm space-y-2">
-              <KV label="Stage" value={currentStage?.name ?? "—"} />
-              <KV
-                label="Created"
-                value={opp.created_at ? new Date(opp.created_at).toLocaleString() : "—"}
-              />
-              <KV
-                label="Updated"
-                value={opp.updated_at ? new Date(opp.updated_at).toLocaleString() : "—"}
-              />
-              <KV label="Opportunity ID" value={String(opp.id)} />
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-lg font-medium">
+                Business Case &amp; Scenarios{" "}
+                {bc ? <span className="text-gray-500">— {bc.name}</span> : null}
+              </div>
+              <div className="flex gap-2">
+                {/* CREATE yalnızca BC YOKSA görünür */}
+                {!bc?.id && (
+                  <button
+                    onClick={onCreateBusinessCase}
+                    disabled={busy || !opp}
+                    className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    Create Business Case
+                  </button>
+                )}
+                {/* BC varsa View / Edit */}
+                {bc?.id && (
+                  <>
+                    <button
+                      onClick={onViewBC}
+                      className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+                    >
+                      View Business Case
+                    </button>
+                    <button
+                      onClick={onEditBC}
+                      className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+                    >
+                      Edit Business Case
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
+
+            {/* İçerik */}
+            {!bc?.id ? (
+              <div className="text-sm text-gray-500">
+                There is no business case for this opportunity yet. Use{" "}
+                <b>Create Business Case</b> to create one.
+              </div>
+            ) : bcLoading ? (
+              <div className="text-sm text-gray-500">Loading scenarios…</div>
+            ) : !bc.scenarios || bc.scenarios.length === 0 ? (
+              <div className="text-sm text-gray-500">No scenarios yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left border-b">
+                      <th className="py-2 pr-4">Name</th>
+                      <th className="py-2 pr-4">Start</th>
+                      <th className="py-2 pr-4">Months</th>
+                      <th className="py-2 pr-4 w-48 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bc.scenarios.map((s) => (
+                      <tr key={s.id} className="border-b last:border-0">
+                        <td className="py-2 pr-4 font-medium">{s.name}</td>
+                        <td className="py-2 pr-4">{formatDate(s.start_date)}</td>
+                        <td className="py-2 pr-4">{s.months}</td>
+                        <td className="py-2 pr-4 text-right">
+                          <Link
+                            to={`/scenarios/${s.id}`}
+                            className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
+                          >
+                            View
+                          </Link>
+                          <Link
+                            to={`/scenarios/${s.id}?edit=1`}
+                            className="px-2 py-1 rounded border hover:bg-gray-50"
+                          >
+                            Edit
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        </div>
+        </>
       )}
     </div>
   );
 }
 
 /** Büyük, tek renkli, birbirine giren oklar — stage ilerledikçe koyulaşır; aktif stage daha vurgulu */
-/** Büyük, eşit genişlikte oklar — aktif aşama kırmızı çerçeveli */
-/** Büyük, eşit genişlikte oklar — aktif aşama siyah çerçeveli */
-/** Salesforce benzeri oklar – sadece aktif stage siyah konturlu */
 function PipelineArrows({
   stages,
   currentStageId,
@@ -171,13 +378,14 @@ function PipelineArrows({
   const colorFor = (idx: number) => {
     const total = stages.length;
     const startL = 78; // açık
-    const endL = 45;   // koyu
+    const endL = 45; // koyu
     const L = startL - ((startL - endL) * idx) / Math.max(1, total - 1);
     return `hsl(214 70% ${L}%)`;
   };
 
   // tüm aşamalar için aynı ok şekli
-  const shape = "polygon(0 0, calc(100% - 24px) 0, 100% 50%, calc(100% - 24px) 100%, 0 100%, 24px 50%)";
+  const shape =
+    "polygon(0 0, calc(100% - 24px) 0, 100% 50%, calc(100% - 24px) 100%, 0 100%, 24px 50%)";
 
   return (
     <div className="w-full flex items-stretch overflow-hidden select-none">
@@ -218,7 +426,6 @@ function PipelineArrows({
   );
 }
 
-
 function KV({ label, value }: { label: string; value?: React.ReactNode | string | null }) {
   const display =
     value == null || value === "" ? <span className="text-gray-500">—</span> : value;
@@ -228,4 +435,10 @@ function KV({ label, value }: { label: string; value?: React.ReactNode | string 
       <div>{display}</div>
     </div>
   );
+}
+
+function formatDate(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toISOString().slice(0, 10);
 }
