@@ -1,3 +1,4 @@
+# backend/app/models/__init__.py
 from sqlalchemy import (
     Column,
     Integer,
@@ -251,6 +252,11 @@ class Scenario(Base):
         "ScenarioOverhead", back_populates="scenario",
         cascade="all, delete-orphan", lazy="selectin"
     )
+    # NEW: BOQ items
+    boq_items = relationship(
+        "ScenarioBOQItem", back_populates="scenario",
+        cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class ScenarioProduct(Base):
@@ -295,6 +301,32 @@ class ScenarioOverhead(Base):
 
     # ilişkiler
     scenario = relationship("Scenario", back_populates="overheads", lazy="selectin")
+
+
+# --------- NEW: BOQ (Bill of Quantities) ---------
+class ScenarioBOQItem(Base):
+    __tablename__ = "scenario_boq_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+
+    section = Column(String(50), nullable=True)          # örn. "AN", "EM"
+    item_name = Column(String(255), nullable=False)
+    unit = Column(String(50), nullable=False)            # ton, m3, adet...
+    quantity = Column(Numeric(18, 4), nullable=False, default=0)
+    unit_price = Column(Numeric(18, 4), nullable=False, default=0)
+    unit_cogs = Column(Numeric(18, 4), nullable=True)    # opsiyonel
+
+    frequency = Column(String(20), nullable=False, default="once")  # once|monthly|per_shipment|per_tonne
+    start_year = Column(Integer, nullable=True)
+    start_month = Column(Integer, nullable=True)         # 1..12
+    months = Column(Integer, nullable=True)              # monthly ise kaç ay
+
+    is_active = Column(Boolean, nullable=False, default=True)
+    notes = Column(Text, nullable=True)
+
+    # ilişkiler
+    scenario = relationship("Scenario", back_populates="boq_items", lazy="selectin")
 
 
 # --------- Create Tables (if not exist) ---------

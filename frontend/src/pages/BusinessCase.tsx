@@ -1,7 +1,8 @@
 // src/pages/BusinessCase.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { apiGet, apiPost, ApiError } from "../lib/api";
+// import { formatDate } from "../utils/format"; // <- ŞİMDİLİK KALDIRILDI
 
 /** ------------ Backend ile uyumlu tipler ------------ */
 type ScenarioRow = {
@@ -35,12 +36,13 @@ export default function BusinessCasePage() {
     months: "36",
     start_date: firstDayOfThisMonthISO(),
   }));
-  const isValid = useMemo(
-    () => form.name.trim().length > 0 && Number(form.months) > 0 && !!form.start_date,
-    [form]
-  );
 
-  const fetchBC = async () => {
+  const isValid = useMemo(() => {
+    const m = Number(form.months);
+    return form.name.trim().length > 0 && Number.isFinite(m) && m > 0 && !!form.start_date;
+  }, [form]);
+
+  const fetchBC = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -56,17 +58,16 @@ export default function BusinessCasePage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [bcId]);
 
   useEffect(() => {
-    if (!bcId) {
+    if (!bcId || Number.isNaN(bcId)) {
       setError("Invalid business case id");
       setLoading(false);
       return;
     }
     fetchBC();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bcId]);
+  }, [bcId, fetchBC]);
 
   const onNewScenario = () => {
     setForm({ name: "", months: "36", start_date: firstDayOfThisMonthISO() });
@@ -84,16 +85,21 @@ export default function BusinessCasePage() {
     try {
       await apiPost("/business-cases/scenarios", body);
       setOpen(false);
-      await fetchBC();
+      await fetchBC(); // sadece listeyi yenile
     } catch (e: any) {
       alert(
         (e instanceof ApiError && e.message) ||
           e?.response?.data?.detail ||
           e?.message ||
-          "Save failed"
+          "Save failed",
       );
     }
   };
+
+  const scenarios = useMemo(
+    () => (data?.scenarios ?? []).slice().sort((a, b) => a.id - b.id),
+    [data?.scenarios],
+  );
 
   return (
     <div className="bg-white rounded-xl shadow p-6">
@@ -102,11 +108,7 @@ export default function BusinessCasePage() {
         <div>
           <h2 className="text-lg font-medium">Business Case</h2>
           <div className="text-sm text-gray-500">
-            {businessCaseId ? (
-              <>
-                ID: <b>{businessCaseId}</b>
-              </>
-            ) : null}
+            {businessCaseId ? <>ID: <b>{businessCaseId}</b></> : null}
             {data ? (
               <>
                 {" "}
@@ -122,7 +124,6 @@ export default function BusinessCasePage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          {/* NEW: Back to Opportunity */}
           <button
             onClick={() => data && navigate(`/deals/${data.opportunity_id}`)}
             disabled={!data}
@@ -153,8 +154,8 @@ export default function BusinessCasePage() {
 
       {!loading && !error && data && (
         <>
-          <SectionHeader title="Scenarios" />
-          {data.scenarios.length === 0 ? (
+          <SectionHeader title={`Scenarios (${scenarios.length})`} />
+          {scenarios.length === 0 ? (
             <div className="text-sm text-gray-500">No scenarios yet. Add one.</div>
           ) : (
             <div className="overflow-x-auto">
@@ -168,7 +169,7 @@ export default function BusinessCasePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.scenarios.map((s) => (
+                  {scenarios.map((s) => (
                     <tr key={s.id} className="border-b last:border-0">
                       <td className="py-2 pr-4 font-medium">{s.name}</td>
                       <td className="py-2 pr-4">{s.months}</td>
@@ -200,6 +201,7 @@ export default function BusinessCasePage() {
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 className="w-full px-3 py-2 rounded-md border text-sm"
                 placeholder="Base Case"
+                autoFocus
               />
             </Field>
 
@@ -207,8 +209,10 @@ export default function BusinessCasePage() {
               <Field label="Months">
                 <input
                   type="number"
-                  value={form.months}
+                  inputMode="numeric"
                   min={1}
+                  step={1}
+                  value={form.months}
                   onChange={(e) => setForm((f) => ({ ...f, months: e.target.value }))}
                   className="w-full px-3 py-2 rounded-md border text-sm"
                   placeholder="36"
@@ -247,7 +251,7 @@ export default function BusinessCasePage() {
 }
 
 /** ------------ küçük UI yardımcıları ------------ */
-function SectionHeader({ title, right }: { title: string; right?: React.ReactNode }) {
+function SectionHeader({ title, right }: { title: string; right?: ReactNode }) {
   return (
     <div className="flex items-center justify-between mt-6 mb-2">
       <h3 className="font-medium">{title}</h3>
@@ -256,7 +260,7 @@ function SectionHeader({ title, right }: { title: string; right?: React.ReactNod
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
       <div className="text-xs text-gray-500 mb-1">{label}</div>
@@ -271,7 +275,7 @@ function Modal({
   onClose,
 }: {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
   onClose: () => void;
 }) {
   return (

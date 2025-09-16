@@ -18,6 +18,45 @@ export type ScenarioOverhead = {
   amount: number; // fixed: amount, %_revenue: fraction (0.2 -> 20%)
 };
 
+/* ---------------- BOQ (Bill of Quantities) ----------------
+   Not: Bu tipler UI'da satır-bazlı BOQ ekranı için kullanılacak.
+   Backend'e bağlanana kadar opsiyonel (?), hiçbir şey kırmaz.
+*/
+
+export type BOQFrequency =
+  | "once"          // tek seferlik
+  | "monthly"       // her ay
+  | "per_shipment"  // gönderi başına (ileride kullanılabilir)
+  | "per_tonne";    // ton başına (ileride kullanılabilir)
+
+// Dropdown vs. için ortak liste (opsiyonel kalite artırımı)
+export const BOQ_FREQUENCIES: BOQFrequency[] = [
+  "once",
+  "monthly",
+  "per_shipment",
+  "per_tonne",
+];
+
+export type ScenarioBOQItem = {
+  id: number;
+  scenario_id?: number;
+  section?: string | null;   // gruplama (örn. “AN”, “EM”)
+  item_name: string;         // kalem adı
+  unit: string;              // ölçü birimi (ton, m3, adet, vb.)
+  quantity: number;          // miktar
+  unit_price: number;        // birim satış fiyatı
+  unit_cogs?: number;        // birim maliyet (opsiyonel)
+  frequency: BOQFrequency;   // hesaplama sıklığı
+  start_year?: number;       // opsiyonel başlangıç
+  start_month?: number;      // opsiyonel başlangıç
+  months?: number;           // kaç ay sürecek (opsiyonel)
+  is_active?: boolean;       // satır geçerli mi
+  notes?: string | null;     // serbest açıklama
+};
+
+// Yeni kayıt (POST) / güncelleme (PATCH) payload'larında kullanışlı
+export type NewScenarioBOQItem = Omit<ScenarioBOQItem, "id">;
+
 export type ScenarioDetail = {
   id: number;
   business_case_id: number;
@@ -26,6 +65,8 @@ export type ScenarioDetail = {
   start_date: string; // ISO
   products: ScenarioProduct[];
   overheads: ScenarioOverhead[];
+  /** BOQ satırları (opsiyonel; backend hazır değilse gelmeyebilir) */
+  boq_items?: ScenarioBOQItem[];
 };
 
 export type PLMonth = {
