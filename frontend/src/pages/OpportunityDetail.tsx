@@ -57,6 +57,18 @@ export default function OpportunityDetailPage() {
   const [bc, setBc] = useState<BusinessCaseOut | null>(null);
   const [bcLoading, setBcLoading] = useState(false);
 
+  // NEW — Scenario create modal state
+  const [openScenario, setOpenScenario] = useState(false);
+  const [scenarioForm, setScenarioForm] = useState<{ name: string; months: string; start_date: string }>(() => ({
+    name: "",
+    months: "36",
+    start_date: firstDayOfThisMonthISO(),
+  }));
+  const scenarioValid =
+    scenarioForm.name.trim().length > 0 &&
+    Number(scenarioForm.months) > 0 &&
+    !!scenarioForm.start_date;
+
   const currentStage = useMemo(
     () => (opp ? stages.find((s) => s.id === opp.stage_id) : undefined),
     [opp, stages]
@@ -104,7 +116,7 @@ export default function OpportunityDetailPage() {
       setOpp(data);
       setStages(Array.isArray(st) ? st : []);
 
-      // Önce opp üzerinde bcId varsa onunla çek, yoksa opp'tan dene (mevcut BC olsa bile null olabilir)
+      // Önce opp üzerinde bcId varsa onunla çek, yoksa opp'tan dene
       if (data?.business_case_id) {
         await fetchBC(Number(data.business_case_id));
       } else {
@@ -161,6 +173,35 @@ export default function OpportunityDetailPage() {
       );
     } finally {
       setBusy(false);
+    }
+  };
+
+  // NEW — open scenario modal
+  const onNewScenario = () => {
+    setScenarioForm({ name: "", months: "36", start_date: firstDayOfThisMonthISO() });
+    setOpenScenario(true);
+  };
+
+  // NEW — save scenario for current BC
+  const onSaveScenario = async () => {
+    if (!bc?.id || !scenarioValid) return;
+    const body = {
+      business_case_id: bc.id,
+      name: scenarioForm.name.trim(),
+      months: Number(scenarioForm.months),
+      start_date: scenarioForm.start_date, // "YYYY-MM-DD"
+    };
+    try {
+      await apiPost("/business-cases/scenarios", body);
+      setOpenScenario(false);
+      await fetchBC(bc.id); // listeyi tazele
+    } catch (e: any) {
+      alert(
+        (e instanceof ApiError && e.message) ||
+          e?.response?.data?.detail ||
+          e?.message ||
+          "Failed to create scenario"
+      );
     }
   };
 
@@ -272,7 +313,7 @@ export default function OpportunityDetailPage() {
             </div>
           </div>
 
-          {/* ALT — Business Case & Scenarios bölümü */}
+          {/* ALT — Business Case & Scenarios */}
           <div className="bg-white rounded-xl shadow p-5">
             <div className="flex items-center justify-between mb-3">
               <div className="text-lg font-medium">
@@ -290,7 +331,7 @@ export default function OpportunityDetailPage() {
                     Create Business Case
                   </button>
                 )}
-                {/* BC varsa View / Edit */}
+                {/* BC varsa View / Edit / NEW SCENARIO */}
                 {bc?.id && (
                   <>
                     <button
@@ -304,6 +345,12 @@ export default function OpportunityDetailPage() {
                       className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
                     >
                       Edit Business Case
+                    </button>
+                    <button
+                      onClick={onNewScenario}
+                      className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+                    >
+                      + New Scenario
                     </button>
                   </>
                 )}
@@ -319,7 +366,7 @@ export default function OpportunityDetailPage() {
             ) : bcLoading ? (
               <div className="text-sm text-gray-500">Loading scenarios…</div>
             ) : !bc.scenarios || bc.scenarios.length === 0 ? (
-              <div className="text-sm text-gray-500">No scenarios yet.</div>
+              <div className="text-sm text-gray-500">No scenarios yet. Use <b>+ New Scenario</b>.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
@@ -359,6 +406,62 @@ export default function OpportunityDetailPage() {
             )}
           </div>
         </>
+      )}
+
+      {/* NEW — Scenario Create Modal */}
+      {openScenario && (
+        <Modal
+          title="New Scenario"
+          onClose={() => setOpenScenario(false)}
+        >
+          <div className="space-y-3">
+            <Field label="Name">
+              <input
+                value={scenarioForm.name}
+                onChange={(e) => setScenarioForm((f) => ({ ...f, name: e.target.value }))}
+                className="w-full px-3 py-2 rounded-md border text-sm"
+                placeholder="Base Case"
+              />
+            </Field>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Field label="Months">
+                <input
+                  type="number"
+                  value={scenarioForm.months}
+                  min={1}
+                  onChange={(e) => setScenarioForm((f) => ({ ...f, months: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-md border text-sm"
+                  placeholder="36"
+                />
+              </Field>
+              <Field label="Start Date">
+                <input
+                  type="date"
+                  value={scenarioForm.start_date}
+                  onChange={(e) => setScenarioForm((f) => ({ ...f, start_date: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-md border text-sm"
+                />
+              </Field>
+            </div>
+          </div>
+
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => setOpenScenario(false)}
+              className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              disabled={!scenarioValid}
+              onClick={onSaveScenario}
+              className="px-3 py-1.5 rounded-md bg-indigo-600 text-white disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+        </Modal>
       )}
     </div>
   );
@@ -441,4 +544,44 @@ function formatDate(iso: string) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toISOString().slice(0, 10);
+}
+function firstDayOfThisMonthISO() {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
+  return d.toISOString().slice(0, 10);
+}
+
+/* ---- small UI helpers (Modal/Field) borrowed from other pages for consistency ---- */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      {children}
+    </label>
+  );
+}
+function Modal({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
+      <div className="bg-white w-[760px] max-w-[95vw] rounded-xl shadow p-5 relative">
+        <div className="text-lg font-semibold mb-4">{title}</div>
+        {children}
+        <button
+          onClick={onClose}
+          className="absolute top-2 right-2 rounded-md px-2 py-1 text-sm text-gray-500 hover:bg-gray-100"
+          aria-label="Close"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  );
 }
