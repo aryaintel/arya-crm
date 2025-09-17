@@ -2,16 +2,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost, ApiError } from "../../lib/api";
-import type { ScenarioDetail, PLResponse, ScenarioBOQItem } from "../../types/scenario";
+import type { ScenarioDetail, PLResponse, ScenarioBOQItem, CapexEntry } from "../../types/scenario";
 import { formatDate } from "../../utils/format";
 import PLTab from "./tabs/PLTab";
 import TWCTab from "./tabs/TWCTab";
 import VolumesTab from "./tabs/VolumesTab";
-// 🔧 FIX: BOQTable artık global components altında
+// BOQ global components altında
 import BOQTable from "../../components/BOQTable";
+// CAPEX bu sayfanın altındaki components klasöründe
+import CapexTable from "./components/CapexTable";
 
-type TabKey = "pl" | "twc" | "volumes" | "boq";
-const VALID_TABS: TabKey[] = ["pl", "twc", "volumes", "boq"];
+type TabKey = "pl" | "twc" | "volumes" | "boq" | "capex";
+const VALID_TABS: TabKey[] = ["pl", "twc", "volumes", "boq", "capex"];
 
 export default function ScenarioPage() {
   const { scenarioId } = useParams<{ scenarioId: string }>();
@@ -29,12 +31,14 @@ export default function ScenarioPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  // URL değiştikçe sekmeyi senkronize et
   useEffect(() => {
     const t = (searchParams.get("tab") as TabKey) || "pl";
     if (VALID_TABS.includes(t) && t !== tab) setTab(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Sekme değişince URL paramını güncelle
   useEffect(() => {
     setSearchParams((prev) => {
       const p = new URLSearchParams(prev);
@@ -48,8 +52,10 @@ export default function ScenarioPage() {
     setError(null);
     setPl(null);
     try {
+      // Senaryo detayı
       const base = await apiGet<ScenarioDetail>(`/business-cases/scenarios/${sid}`);
 
+      // BOQ kalemleri
       let boq_items: ScenarioBOQItem[] = [];
       try {
         boq_items = await apiGet<ScenarioBOQItem[]>(
@@ -59,7 +65,15 @@ export default function ScenarioPage() {
         /* optional endpoint */
       }
 
-      setData({ ...base, boq_items });
+      // CAPEX kalemleri
+      let capex: CapexEntry[] = [];
+      try {
+        capex = await apiGet<CapexEntry[]>(`/business-cases/scenarios/${sid}/capex`);
+      } catch {
+        /* optional endpoint */
+      }
+
+      setData({ ...base, boq_items, capex });
     } catch (e: any) {
       const msg =
         (e instanceof ApiError && e.message) ||
@@ -102,6 +116,7 @@ export default function ScenarioPage() {
   };
 
   const boqCount = useMemo(() => data?.boq_items?.length ?? 0, [data?.boq_items]);
+  const capexCount = useMemo(() => data?.capex?.length ?? 0, [data?.capex]);
 
   return (
     <div className="bg-white rounded-xl shadow p-6">
@@ -149,7 +164,7 @@ export default function ScenarioPage() {
       </div>
 
       <div className="flex items-center gap-3 border-b mb-4">
-        {(["pl", "twc", "volumes", "boq"] as const).map((t) => (
+        {(["pl", "twc", "volumes", "boq", "capex"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -165,7 +180,9 @@ export default function ScenarioPage() {
               ? "TWC"
               : t === "volumes"
               ? "Volumes"
-              : `BOQ${boqCount ? ` (${boqCount})` : ""}`}
+              : t === "boq"
+              ? `BOQ${boqCount ? ` (${boqCount})` : ""}`
+              : `Capex${capexCount ? ` (${capexCount})` : ""}`}
           </button>
         ))}
       </div>
@@ -192,6 +209,10 @@ export default function ScenarioPage() {
           )}
 
           {tab === "boq" && <BOQTable key={`boq-${data.id}`} data={data} refresh={fetchScenario} />}
+
+          {tab === "capex" && (
+            <CapexTable key={`capex-${data.id}`} data={data} refresh={fetchScenario} />
+          )}
         </>
       )}
     </div>

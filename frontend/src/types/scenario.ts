@@ -26,7 +26,7 @@ export const BOQ_FREQUENCIES: BOQFrequency[] = [
   "per_tonne",
 ];
 
-// ---------- NEW: Category tipi & yardımcı sabitler ----------
+// ---------- Category tipi & yardımcı sabitler ----------
 export type BOQCategory = "bulk_with_freight" | "bulk_ex_freight" | "freight";
 
 export const BOQ_CATEGORIES: BOQCategory[] = [
@@ -40,7 +40,7 @@ export const BOQ_CATEGORY_LABELS: Record<BOQCategory, string> = {
   bulk_ex_freight: "Bulk (ex Freight)",
   freight: "Freight",
 };
-// -----------------------------------------------------------
+// ------------------------------------------------------
 
 export type ScenarioBOQItem = {
   id: number;
@@ -50,7 +50,7 @@ export type ScenarioBOQItem = {
   unit: string;
   quantity: number;
   unit_price: number;
-  unit_cogs?: number;
+  unit_cogs?: number | null; // <-- burada null'a izin veriyoruz
   frequency: BOQFrequency;
   start_year?: number;
   start_month?: number;
@@ -62,6 +62,17 @@ export type ScenarioBOQItem = {
 
 export type NewScenarioBOQItem = Omit<ScenarioBOQItem, "id">;
 
+/* ===================== CAPEX ===================== */
+export type CapexEntry = {
+  id: number;
+  year: number;          // 2025
+  month: number;         // 1..12
+  amount: number;        // yatırım çıkışı (-) veya iade (+)
+  notes?: string | null;
+};
+export type NewCapexEntry = Omit<CapexEntry, "id">;
+/* ================================================= */
+
 export type ScenarioDetail = {
   id: number;
   business_case_id: number;
@@ -71,6 +82,7 @@ export type ScenarioDetail = {
   products: ScenarioProduct[];
   overheads: ScenarioOverhead[];
   boq_items?: ScenarioBOQItem[];
+  capex?: CapexEntry[];  // NEW: CAPEX satırları
 };
 
 export type PLMonth = {
