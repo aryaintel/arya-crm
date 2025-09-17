@@ -28,7 +28,8 @@ import LeadDetailPage from "./pages/LeadDetail";
 
 // NEW
 import BusinessCasePage from "./pages/BusinessCase";
-import ScenarioPage from "./pages/Scenario";
+// 🔧 FIX: tabs’lı sayfa
+import ScenarioPage from "./pages/scenario/ScenarioPage";
 
 import { apiGet, ApiError } from "./lib/api";
 import { clearToken, getToken, AUTH_EVENT } from "./lib/auth";
@@ -78,7 +79,6 @@ export default function App() {
         continue;
       }
     }
-    // ApiError imzası: (status: number, message: string)
     throw lastErr instanceof ApiError
       ? lastErr
       : new ApiError(404, "me endpoint not found");
@@ -179,7 +179,7 @@ export default function App() {
           >
             Opportunities
           </NavLink>
-          {/* Business Case / Scenario için ana menü linki yok; detay sayfalarından gidiliyor */}
+          {/* Business Case / Scenario menüden değil, detaydan gidiliyor */}
           {isAdmin && (
             <>
               <NavLink

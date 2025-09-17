@@ -1,3 +1,4 @@
+// src/pages/scenario/ScenarioPage.tsx
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { apiGet, apiPost, ApiError } from "../../lib/api";
@@ -6,7 +7,8 @@ import { formatDate } from "../../utils/format";
 import PLTab from "./tabs/PLTab";
 import TWCTab from "./tabs/TWCTab";
 import VolumesTab from "./tabs/VolumesTab";
-import BOQTable from "./components/BOQTable";
+// 🔧 FIX: BOQTable artık global components altında
+import BOQTable from "../../components/BOQTable";
 
 type TabKey = "pl" | "twc" | "volumes" | "boq";
 const VALID_TABS: TabKey[] = ["pl", "twc", "volumes", "boq"];
@@ -15,7 +17,6 @@ export default function ScenarioPage() {
   const { scenarioId } = useParams<{ scenarioId: string }>();
   const sid = Number(scenarioId);
 
-  // URL param tab yönetimi
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = (searchParams.get("tab") as TabKey) || "pl";
   const initialTab: TabKey = VALID_TABS.includes(tabParam) ? tabParam : "pl";
@@ -28,14 +29,12 @@ export default function ScenarioPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // URL değişirse (geri/ileri) sekmeyi senkronize et
   useEffect(() => {
     const t = (searchParams.get("tab") as TabKey) || "pl";
     if (VALID_TABS.includes(t) && t !== tab) setTab(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
-  // Sekme değişince URL paramını güncelle
   useEffect(() => {
     setSearchParams((prev) => {
       const p = new URLSearchParams(prev);
@@ -49,17 +48,15 @@ export default function ScenarioPage() {
     setError(null);
     setPl(null);
     try {
-      // 1) Ana senaryo
       const base = await apiGet<ScenarioDetail>(`/business-cases/scenarios/${sid}`);
 
-      // 2) BOQ kalemleri (embed edilmediyse ayrıca çek)
       let boq_items: ScenarioBOQItem[] = [];
       try {
         boq_items = await apiGet<ScenarioBOQItem[]>(
           `/business-cases/scenarios/${sid}/boq-items`
         );
       } catch {
-        // endpoint yoksa veya hata verirse sessizce geç (opsiyonel)
+        /* optional endpoint */
       }
 
       setData({ ...base, boq_items });
@@ -104,23 +101,20 @@ export default function ScenarioPage() {
     }
   };
 
-  // BOQ sayacı (sekme etiketinde gösterelim)
   const boqCount = useMemo(() => data?.boq_items?.length ?? 0, [data?.boq_items]);
 
   return (
     <div className="bg-white rounded-xl shadow p-6">
-      {/* notice banner */}
       {notice && (
         <div className="mb-3 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
           {notice}
         </div>
       )}
 
-      {/* header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
         <div>
           <h2 className="text-lg font-medium">Scenario</h2>
-        {data && (
+          {data && (
             <div className="text-sm text-gray-500">
               ID: <b>{data.id}</b> • Name: <b>{data.name}</b> • Months: <b>{data.months}</b> •
               Start: <b>{formatDate(data.start_date)}</b> • BC:{" "}
@@ -154,7 +148,6 @@ export default function ScenarioPage() {
         </div>
       </div>
 
-      {/* tabs */}
       <div className="flex items-center gap-3 border-b mb-4">
         {(["pl", "twc", "volumes", "boq"] as const).map((t) => (
           <button

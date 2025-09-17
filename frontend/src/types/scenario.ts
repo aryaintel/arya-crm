@@ -26,8 +26,21 @@ export const BOQ_FREQUENCIES: BOQFrequency[] = [
   "per_tonne",
 ];
 
-// NEW
+// ---------- NEW: Category tipi & yardımcı sabitler ----------
 export type BOQCategory = "bulk_with_freight" | "bulk_ex_freight" | "freight";
+
+export const BOQ_CATEGORIES: BOQCategory[] = [
+  "bulk_with_freight",
+  "bulk_ex_freight",
+  "freight",
+];
+
+export const BOQ_CATEGORY_LABELS: Record<BOQCategory, string> = {
+  bulk_with_freight: "Bulk (with Freight)",
+  bulk_ex_freight: "Bulk (ex Freight)",
+  freight: "Freight",
+};
+// -----------------------------------------------------------
 
 export type ScenarioBOQItem = {
   id: number;

@@ -5,16 +5,12 @@ import {
   ScenarioBOQItem,
   BOQFrequency,
   BOQCategory,
+  BOQ_CATEGORIES,
+  BOQ_CATEGORY_LABELS,
 } from "../types/scenario";
 import { Card } from "./ui";
 import { fmt } from "../utils/format";
 import { apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
-
-const CATEGORY_OPTIONS: { value: BOQCategory; label: string }[] = [
-  { value: "bulk_with_freight", label: "Bulk with Freight" },
-  { value: "bulk_ex_freight", label: "Bulk price ex-freight" },
-  { value: "freight", label: "Freight" },
-];
 
 type RowDraft = {
   id?: number;
@@ -196,16 +192,16 @@ export default function BOQTable({
       onChange={(e) => onChange(e.target.value as BOQCategory)}
       className="w-40 px-2 py-1 rounded border"
     >
-      {CATEGORY_OPTIONS.map((opt) => (
-        <option key={opt.value} value={opt.value}>
-          {opt.label}
+      {BOQ_CATEGORIES.map((cat) => (
+        <option key={cat} value={cat}>
+          {BOQ_CATEGORY_LABELS[cat]}
         </option>
       ))}
     </select>
   );
 
   const renderCategoryLabel = (value?: string | null) =>
-    CATEGORY_OPTIONS.find((o) => o.value === (value as BOQCategory))?.label ?? "—";
+    value ? BOQ_CATEGORY_LABELS[value as BOQCategory] ?? "—" : "—";
 
   return (
     <Card>
@@ -530,7 +526,9 @@ export default function BOQTable({
               return (
                 <tr key={it.id} className="border-b">
                   <td className="py-1 px-2">{it.section}</td>
-                  <td className="py-1 px-2">{renderCategoryLabel(it.category as any)}</td>
+                  <td className="py-1 px-2">
+                    {renderCategoryLabel(it.category as any)}
+                  </td>
                   <td className="py-1 px-2">{it.item_name}</td>
                   <td className="py-1 px-2">{it.unit}</td>
                   <td className="py-1 px-2 text-right">{fmt(it.quantity)}</td>
