@@ -11,6 +11,7 @@ from sqlalchemy import (
     func,
     Numeric,
     Boolean,
+    Enum,  # NEW: SQLAlchemy Enum
 )
 from sqlalchemy.orm import declarative_base, relationship
 from ..core.config import engine
@@ -324,6 +325,17 @@ class ScenarioBOQItem(Base):
 
     is_active = Column(Boolean, nullable=False, default=True)
     notes = Column(Text, nullable=True)
+
+    # NEW: Category (ENUM)
+    category = Column(
+        Enum(
+            "bulk_with_freight",
+            "bulk_ex_freight",
+            "freight",
+            name="boq_category",
+        ),
+        nullable=True,
+    )
 
     # ilişkiler
     scenario = relationship("Scenario", back_populates="boq_items", lazy="selectin")

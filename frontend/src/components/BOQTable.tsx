@@ -1,20 +1,28 @@
+// src/components/BOQTable.tsx
 import { useMemo, useState } from "react";
 import {
   ScenarioDetail,
   ScenarioBOQItem,
   BOQFrequency,
+  BOQCategory,
 } from "../types/scenario";
 import { Card } from "./ui";
 import { fmt } from "../utils/format";
 import { apiPost, apiPatch, apiDelete, ApiError } from "../lib/api";
 
-/** --- Yardımcılar --- */
+const CATEGORY_OPTIONS: { value: BOQCategory; label: string }[] = [
+  { value: "bulk_with_freight", label: "Bulk with Freight" },
+  { value: "bulk_ex_freight", label: "Bulk price ex-freight" },
+  { value: "freight", label: "Freight" },
+];
+
 type RowDraft = {
   id?: number;
   section?: string | null;
+  category?: BOQCategory | null;
   item_name: string;
   unit: string;
-  quantity: string;      // UI inputları string tutuluyor
+  quantity: string;
   unit_price: string;
   unit_cogs: string;
   frequency: BOQFrequency;
@@ -29,6 +37,7 @@ function toDraft(it?: ScenarioBOQItem): RowDraft {
   return {
     id: it?.id,
     section: it?.section ?? "",
+    category: (it?.category as BOQCategory | undefined) ?? "bulk_ex_freight",
     item_name: it?.item_name ?? "",
     unit: it?.unit ?? "",
     quantity: String(it?.quantity ?? 0),
@@ -44,13 +53,16 @@ function toDraft(it?: ScenarioBOQItem): RowDraft {
 }
 
 function toPayload(d: RowDraft): Omit<ScenarioBOQItem, "id"> {
+  const unitCogs =
+    d.unit_cogs === "" || d.unit_cogs == null ? null : Number(d.unit_cogs || 0);
   return {
     section: d.section || null,
+    category: d.category ?? "bulk_ex_freight",
     item_name: d.item_name.trim(),
     unit: d.unit.trim(),
     quantity: Number(d.quantity || 0),
     unit_price: Number(d.unit_price || 0),
-    unit_cogs: Number(d.unit_cogs || 0),
+    unit_cogs: unitCogs as any,
     frequency: d.frequency,
     months: d.months ? Number(d.months) : undefined,
     start_year: d.start_year ? Number(d.start_year) : undefined,
@@ -60,7 +72,6 @@ function toPayload(d: RowDraft): Omit<ScenarioBOQItem, "id"> {
   };
 }
 
-/** Satır toplamı: freq=monthly ise months ile çarpar; diğerlerinde tek seferlik */
 function lineTotals(it: ScenarioBOQItem) {
   const mult = it.frequency === "monthly" && it.months ? it.months : 1;
   const revenue = (it.quantity ?? 0) * (it.unit_price ?? 0) * mult;
@@ -68,7 +79,6 @@ function lineTotals(it: ScenarioBOQItem) {
   return { revenue, cogs, gm: revenue - cogs };
 }
 
-/** --- Bileşen --- */
 export default function BOQTable({
   data,
   refresh,
@@ -103,6 +113,7 @@ export default function BOQTable({
         unit_cogs: 0,
         frequency: "once",
         is_active: true,
+        category: "bulk_ex_freight",
       } as any),
     );
     setAdding(true);
@@ -176,14 +187,31 @@ export default function BOQTable({
     }
   };
 
+  const renderCategorySelect = (
+    value: BOQCategory | null | undefined,
+    onChange: (v: BOQCategory) => void,
+  ) => (
+    <select
+      value={(value ?? "bulk_ex_freight") as BOQCategory}
+      onChange={(e) => onChange(e.target.value as BOQCategory)}
+      className="w-40 px-2 py-1 rounded border"
+    >
+      {CATEGORY_OPTIONS.map((opt) => (
+        <option key={opt.value} value={opt.value}>
+          {opt.label}
+        </option>
+      ))}
+    </select>
+  );
+
+  const renderCategoryLabel = (value?: string | null) =>
+    CATEGORY_OPTIONS.find((o) => o.value === (value as BOQCategory))?.label ?? "—";
+
   return (
     <Card>
       <div className="flex items-center justify-between mb-2">
         <div className="text-sm font-medium">BOQ (Bill of Quantities)</div>
-        <button
-          onClick={beginAdd}
-          className="px-2 py-1 rounded border text-sm hover:bg-gray-50"
-        >
+        <button onClick={beginAdd} className="px-2 py-1 rounded border text-sm hover:bg-gray-50">
           + Add BOQ Item
         </button>
       </div>
@@ -193,6 +221,7 @@ export default function BOQTable({
           <thead>
             <tr className="border-b">
               <th className="py-1 px-2 text-left">Section</th>
+              <th className="py-1 px-2 text-left">Category</th>
               <th className="py-1 px-2 text-left">Item</th>
               <th className="py-1 px-2 text-left">Unit</th>
               <th className="py-1 px-2 text-right">Qty</th>
@@ -209,7 +238,6 @@ export default function BOQTable({
             </tr>
           </thead>
           <tbody>
-            {/* Add row */}
             {adding && draft && (
               <tr className="border-b bg-yellow-50/40">
                 <td className="py-1 px-2">
@@ -218,6 +246,11 @@ export default function BOQTable({
                     onChange={(e) => setDraft({ ...draft, section: e.target.value })}
                     className="w-28 px-2 py-1 rounded border"
                   />
+                </td>
+                <td className="py-1 px-2">
+                  {renderCategorySelect(draft.category ?? "bulk_ex_freight", (v) =>
+                    setDraft({ ...draft, category: v }),
+                  )}
                 </td>
                 <td className="py-1 px-2">
                   <input
@@ -304,7 +337,6 @@ export default function BOQTable({
                     onChange={(e) => setDraft({ ...draft, is_active: e.target.checked })}
                   />
                 </td>
-                {/* line totals preview */}
                 <td className="py-1 px-2 text-right">
                   {fmt(
                     Number(draft.quantity || 0) *
@@ -333,37 +365,30 @@ export default function BOQTable({
                   )}
                 </td>
                 <td className="py-1 px-2 text-right">
-                  <button
-                    onClick={saveAdd}
-                    className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
-                  >
+                  <button onClick={saveAdd} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">
                     Save
                   </button>
-                  <button
-                    onClick={cancelEdit}
-                    className="px-2 py-1 rounded border hover:bg-gray-50"
-                  >
+                  <button onClick={cancelEdit} className="px-2 py-1 rounded border hover:bg-gray-50">
                     Cancel
                   </button>
                 </td>
               </tr>
             )}
 
-            {/* Existing rows */}
             {items.length === 0 && !adding && (
               <tr>
-                <td colSpan={14} className="py-2 text-gray-500">
+                <td colSpan={15} className="py-2 text-gray-500">
                   No BOQ items.
                 </td>
               </tr>
             )}
 
-            {items.map((it: ScenarioBOQItem) => {
+            {items.map((it) => {
               const editing = Boolean(editingId === it.id && draft);
               const lt = lineTotals(it);
 
               if (editing) {
-                const d = draft as RowDraft; // TS: draft burada non-null
+                const d = draft as RowDraft;
                 return (
                   <tr key={it.id} className="border-b bg-yellow-50/40">
                     <td className="py-1 px-2">
@@ -372,6 +397,11 @@ export default function BOQTable({
                         onChange={(e) => setDraft({ ...d, section: e.target.value })}
                         className="w-28 px-2 py-1 rounded border"
                       />
+                    </td>
+                    <td className="py-1 px-2">
+                      {renderCategorySelect(d.category ?? "bulk_ex_freight", (v) =>
+                        setDraft({ ...d, category: v }),
+                      )}
                     </td>
                     <td className="py-1 px-2">
                       <input
@@ -486,16 +516,10 @@ export default function BOQTable({
                       )}
                     </td>
                     <td className="py-1 px-2 text-right">
-                      <button
-                        onClick={saveEdit}
-                        className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
-                      >
+                      <button onClick={saveEdit} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">
                         Save
                       </button>
-                      <button
-                        onClick={cancelEdit}
-                        className="px-2 py-1 rounded border hover:bg-gray-50"
-                      >
+                      <button onClick={cancelEdit} className="px-2 py-1 rounded border hover:bg-gray-50">
                         Cancel
                       </button>
                     </td>
@@ -506,6 +530,7 @@ export default function BOQTable({
               return (
                 <tr key={it.id} className="border-b">
                   <td className="py-1 px-2">{it.section}</td>
+                  <td className="py-1 px-2">{renderCategoryLabel(it.category as any)}</td>
                   <td className="py-1 px-2">{it.item_name}</td>
                   <td className="py-1 px-2">{it.unit}</td>
                   <td className="py-1 px-2 text-right">{fmt(it.quantity)}</td>
@@ -523,16 +548,10 @@ export default function BOQTable({
                   <td className="py-1 px-2 text-right">{fmt(lt.cogs)}</td>
                   <td className="py-1 px-2 text-right">{fmt(lt.gm)}</td>
                   <td className="py-1 px-2 text-right">
-                    <button
-                      onClick={() => beginEdit(it)}
-                      className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
-                    >
+                    <button onClick={() => beginEdit(it)} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">
                       Edit
                     </button>
-                    <button
-                      onClick={() => onDelete(it)}
-                      className="px-2 py-1 rounded border hover:bg-gray-50"
-                    >
+                    <button onClick={() => onDelete(it)} className="px-2 py-1 rounded border hover:bg-gray-50">
                       Delete
                     </button>
                   </td>
@@ -543,9 +562,7 @@ export default function BOQTable({
 
           <tfoot>
             <tr className="border-t font-medium">
-              <td colSpan={10} className="py-1 px-2 text-right">
-                Totals:
-              </td>
+              <td colSpan={11} className="py-1 px-2 text-right">Totals:</td>
               <td className="py-1 px-2 text-right">{fmt(totals.revenue)}</td>
               <td className="py-1 px-2 text-right">{fmt(totals.cogs)}</td>
               <td className="py-1 px-2 text-right">{fmt(totals.gm)}</td>

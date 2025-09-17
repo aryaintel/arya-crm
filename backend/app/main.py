@@ -1,3 +1,4 @@
+# backend/app/main.py
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -12,9 +13,9 @@ from .api import (
     roles,
     secure,
     leads,
-    business_cases,         # Business Case & Scenario API
-    scenario_overheads,          # ← yeni router
-    scenario_boq,
+    business_cases,      # Business Case & Scenario API
+    scenario_overheads,  # Overheads router
+    scenario_boq,        # BOQ router ← NEW
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -22,7 +23,6 @@ app = FastAPI(title="Arya CRM API")
 # ---------------------------
 # CORS (frontend için)
 # ---------------------------
-# settings.CORS_ALLOW_ORIGINS varsa onu kullan; yoksa dev için localhost izinlerini ver
 allow_origins = getattr(
     settings,
     "CORS_ALLOW_ORIGINS",
@@ -68,5 +68,5 @@ app.include_router(roles.router)
 app.include_router(secure.router)
 app.include_router(leads.router)
 app.include_router(business_cases.router)
-app.include_router(scenario_overheads.router)  # ← eklendi
-app.include_router(scenario_boq.router)
+app.include_router(scenario_overheads.router)
+app.include_router(scenario_boq.router)  # ← NEW

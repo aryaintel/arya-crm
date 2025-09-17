@@ -1,12 +1,11 @@
 // src/types/scenario.ts
-
 export type ProductMonth = { year: number; month: number; quantity: number };
 
 export type ScenarioProduct = {
   id: number;
   name: string;
-  price: number;        // unit price
-  unit_cogs: number;    // unit cogs
+  price: number;
+  unit_cogs: number;
   is_active: boolean;
   months: ProductMonth[];
 };
@@ -15,21 +14,11 @@ export type ScenarioOverhead = {
   id: number;
   name: string;
   type: "fixed" | "%_revenue";
-  amount: number; // fixed: amount, %_revenue: fraction (0.2 -> 20%)
+  amount: number;
 };
 
-/* ---------------- BOQ (Bill of Quantities) ----------------
-   Not: Bu tipler UI'da satır-bazlı BOQ ekranı için kullanılacak.
-   Backend'e bağlanana kadar opsiyonel (?), hiçbir şey kırmaz.
-*/
+export type BOQFrequency = "once" | "monthly" | "per_shipment" | "per_tonne";
 
-export type BOQFrequency =
-  | "once"          // tek seferlik
-  | "monthly"       // her ay
-  | "per_shipment"  // gönderi başına (ileride kullanılabilir)
-  | "per_tonne";    // ton başına (ileride kullanılabilir)
-
-// Dropdown vs. için ortak liste (opsiyonel kalite artırımı)
 export const BOQ_FREQUENCIES: BOQFrequency[] = [
   "once",
   "monthly",
@@ -37,24 +26,27 @@ export const BOQ_FREQUENCIES: BOQFrequency[] = [
   "per_tonne",
 ];
 
+// NEW
+export type BOQCategory = "bulk_with_freight" | "bulk_ex_freight" | "freight";
+
 export type ScenarioBOQItem = {
   id: number;
   scenario_id?: number;
-  section?: string | null;   // gruplama (örn. “AN”, “EM”)
-  item_name: string;         // kalem adı
-  unit: string;              // ölçü birimi (ton, m3, adet, vb.)
-  quantity: number;          // miktar
-  unit_price: number;        // birim satış fiyatı
-  unit_cogs?: number;        // birim maliyet (opsiyonel)
-  frequency: BOQFrequency;   // hesaplama sıklığı
-  start_year?: number;       // opsiyonel başlangıç
-  start_month?: number;      // opsiyonel başlangıç
-  months?: number;           // kaç ay sürecek (opsiyonel)
-  is_active?: boolean;       // satır geçerli mi
-  notes?: string | null;     // serbest açıklama
+  section?: string | null;
+  item_name: string;
+  unit: string;
+  quantity: number;
+  unit_price: number;
+  unit_cogs?: number;
+  frequency: BOQFrequency;
+  start_year?: number;
+  start_month?: number;
+  months?: number;
+  is_active?: boolean;
+  notes?: string | null;
+  category?: BOQCategory | null; // NEW
 };
 
-// Yeni kayıt (POST) / güncelleme (PATCH) payload'larında kullanışlı
 export type NewScenarioBOQItem = Omit<ScenarioBOQItem, "id">;
 
 export type ScenarioDetail = {
@@ -62,10 +54,9 @@ export type ScenarioDetail = {
   business_case_id: number;
   name: string;
   months: number;
-  start_date: string; // ISO
+  start_date: string;
   products: ScenarioProduct[];
   overheads: ScenarioOverhead[];
-  /** BOQ satırları (opsiyonel; backend hazır değilse gelmeyebilir) */
   boq_items?: ScenarioBOQItem[];
 };
 

@@ -1,3 +1,5 @@
+//src>utils>scenarioWindow.ts
+
 import { ScenarioDetail } from "../types/scenario";
 
 export function getScenarioWindow(data: ScenarioDetail | null) {

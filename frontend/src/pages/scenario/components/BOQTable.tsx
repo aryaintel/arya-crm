@@ -1,9 +1,9 @@
-// frontend/src/pages/scenario/components/BOQTable.tsx
 import { useMemo, useState } from "react";
-import type { ScenarioDetail, ScenarioBOQItem, BOQFrequency } from "../../../types/scenario";
-import { fmt } from "../../../utils/format";
 import { apiPost, apiPatch, apiDelete, ApiError } from "../../../lib/api";
+import { fmt } from "../../../utils/format";
+import type { ScenarioDetail, ScenarioBOQItem, BOQFrequency } from "../../../types/scenario";
 
+/** ---- Draft tipi ---- */
 type RowDraft = {
   id?: number;
   section?: string | null;
@@ -69,7 +69,7 @@ export default function BOQTable({
   data: ScenarioDetail;
   refresh: () => void;
 }) {
-  const items: ScenarioBOQItem[] = data.boq_items ?? [];
+  const items = data.boq_items ?? [];
 
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<RowDraft | null>(null);
@@ -149,10 +149,12 @@ export default function BOQTable({
   };
 
   return (
-    <div className="rounded-xl border border-gray-200 p-3">
+    <div className="rounded-lg border p-3">
       <div className="flex items-center justify-between mb-2">
         <div className="text-sm font-medium">BOQ (Bill of Quantities)</div>
-        <button onClick={beginAdd} className="px-2 py-1 rounded border text-sm hover:bg-gray-50">+ Add BOQ Item</button>
+        <button onClick={beginAdd} className="px-2 py-1 rounded border text-sm hover:bg-gray-50">
+          + Add BOQ Item
+        </button>
       </div>
 
       <div className="overflow-x-auto">
@@ -230,7 +232,7 @@ export default function BOQTable({
               <tr><td colSpan={14} className="py-2 text-gray-500">No BOQ items.</td></tr>
             )}
 
-            {items.map((it: ScenarioBOQItem) => {
+            {items.map((it) => {
               const editing = editingId === it.id && draft;
               const lt = lineTotals(it);
 

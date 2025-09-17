@@ -10,6 +10,7 @@ router = APIRouter(prefix="/business-cases/scenarios", tags=["boq"])
 
 # ---------- Pydantic şemaları ----------
 BOQFrequency = Literal["once", "monthly", "per_shipment", "per_tonne"]
+BOQCategory  = Literal["bulk_with_freight", "bulk_ex_freight", "freight"]  # NEW
 
 class BOQCreate(BaseModel):
     section: Optional[str] = None
@@ -24,6 +25,7 @@ class BOQCreate(BaseModel):
     months: Optional[int] = None
     is_active: bool = True
     notes: Optional[str] = None
+    category: Optional[BOQCategory] = None  # NEW
 
 class BOQUpdate(BaseModel):
     section: Optional[str] = None
@@ -38,6 +40,7 @@ class BOQUpdate(BaseModel):
     months: Optional[int] = None
     is_active: Optional[bool] = None
     notes: Optional[str] = None
+    category: Optional[BOQCategory] = None  # NEW
 
 # ---------- yardımcı ----------
 def serialize(it: ScenarioBOQItem) -> dict:
@@ -56,6 +59,7 @@ def serialize(it: ScenarioBOQItem) -> dict:
         "months": it.months,
         "is_active": bool(it.is_active),
         "notes": it.notes,
+        "category": it.category,  # NEW
     }
 
 def ensure_scenario_exists(db: Session, scenario_id: int) -> Scenario:
@@ -102,6 +106,7 @@ def create_boq_item(
         months=body.months,
         is_active=bool(body.is_active),
         notes=body.notes,
+        category=body.category,  # NEW
     )
     db.add(it)
     db.commit()
