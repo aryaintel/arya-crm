@@ -1,297 +1,628 @@
-import { useMemo, useState } from "react";
-import { apiPost, apiPatch, apiDelete, ApiError } from "../../../lib/api";
-import { fmt } from "../../../utils/format";
-import type { ScenarioDetail, ScenarioBOQItem, BOQFrequency } from "../../../types/scenario";
+// frontend/src/pages/scenario/components/BOQTable.tsx
+import type React from "react";
+import { useEffect, useMemo, useState } from "react";
+import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
 
-/** ---- Draft tipi ---- */
-type RowDraft = {
-  id?: number;
-  section?: string | null;
-  item_name: string;
-  unit: string;
-  quantity: string;
-  unit_price: string;
-  unit_cogs: string;
-  frequency: BOQFrequency;
-  months?: string;
-  start_year?: string;
-  start_month?: string;
-  is_active: boolean;
-  notes?: string;
+type Props = {
+  scenarioId: number;
+  onChanged?: () => void;
+  onMarkedReady?: () => void;
 };
 
-function toDraft(it?: ScenarioBOQItem): RowDraft {
-  return {
-    id: it?.id,
-    section: it?.section ?? "",
-    item_name: it?.item_name ?? "",
-    unit: it?.unit ?? "",
-    quantity: String(it?.quantity ?? 0),
-    unit_price: String(it?.unit_price ?? 0),
-    unit_cogs: String(it?.unit_cogs ?? 0),
-    frequency: (it?.frequency ?? "once") as BOQFrequency,
-    months: it?.months ? String(it.months) : "",
-    start_year: it?.start_year ? String(it.start_year) : "",
-    start_month: it?.start_month ? String(it.start_month) : "",
-    is_active: it?.is_active ?? true,
-    notes: it?.notes ?? "",
-  };
+type BOQItem = {
+  id?: number;
+  scenario_id?: number;
+  section?: string | null;
+  category?: "bulk_with_freight" | "bulk_ex_freight" | "freight" | null;
+  item_name: string;
+  unit: string;
+  quantity: number;
+  unit_price: number;
+  unit_cogs?: number | null;
+
+  frequency: "once" | "monthly" | "per_shipment" | "per_tonne";
+  months?: number | null;
+
+  start_year?: number | null;
+  start_month?: number | null;
+
+  is_active: boolean;
+  notes?: string | null;
+};
+
+function cls(...a: (string | false | undefined)[]) {
+  return a.filter(Boolean).join(" ");
+}
+function num(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
 }
 
-function toPayload(d: RowDraft): Omit<ScenarioBOQItem, "id"> {
-  return {
-    section: d.section || null,
-    item_name: d.item_name.trim(),
-    unit: d.unit.trim(),
-    quantity: Number(d.quantity || 0),
-    unit_price: Number(d.unit_price || 0),
-    unit_cogs: Number(d.unit_cogs || 0),
-    frequency: d.frequency,
-    months: d.months ? Number(d.months) : undefined,
-    start_year: d.start_year ? Number(d.start_year) : undefined,
-    start_month: d.start_month ? Number(d.start_month) : undefined,
-    is_active: !!d.is_active,
-    notes: d.notes || null,
-  };
-}
-
-function lineTotals(it: ScenarioBOQItem) {
-  const mult = it.frequency === "monthly" && it.months ? it.months : 1;
-  const revenue = (it.quantity ?? 0) * (it.unit_price ?? 0) * mult;
-  const cogs = (it.quantity ?? 0) * (it.unit_cogs ?? 0) * mult;
-  return { revenue, cogs, gm: revenue - cogs };
-}
-
-export default function BOQTable({
-  data,
-  refresh,
+/** --- Yerleşik ay/yıl seçici (type="month") --- */
+function MonthInput({
+  value,
+  onChange,
+  className,
 }: {
-  data: ScenarioDetail;
-  refresh: () => void;
+  value: { year: number | null | undefined; month: number | null | undefined };
+  onChange: (next: { year: number | null; month: number | null }) => void;
+  className?: string;
 }) {
-  const items = data.boq_items ?? [];
-
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState<RowDraft | null>(null);
-  const [editingId, setEditingId] = useState<number | null>(null);
-
-  const totals = useMemo(() => {
-    const t = { revenue: 0, cogs: 0, gm: 0 };
-    for (const it of items) {
-      const x = lineTotals(it);
-      t.revenue += x.revenue;
-      t.cogs += x.cogs;
-      t.gm += x.gm;
-    }
-    return t;
-  }, [items]);
-
-  const beginAdd = () => {
-    setDraft(
-      toDraft({
-        item_name: "",
-        unit: "",
-        quantity: 0,
-        unit_price: 0,
-        unit_cogs: 0,
-        frequency: "once",
-        is_active: true,
-      } as any)
-    );
-    setAdding(true);
-  };
-
-  const beginEdit = (it: ScenarioBOQItem) => {
-    setEditingId(it.id);
-    setDraft(toDraft(it));
-  };
-
-  const cancelEdit = () => {
-    setAdding(false);
-    setEditingId(null);
-    setDraft(null);
-  };
-
-  const saveAdd = async () => {
-    if (!draft) return;
-    const payload = toPayload(draft);
-    if (!payload.item_name) { alert("Item name gerekli."); return; }
-    try {
-      await apiPost(`/business-cases/scenarios/${data.id}/boq-items`, payload);
-      cancelEdit();
-      await refresh();
-    } catch (e: any) {
-      alert((e instanceof ApiError && e.message) || e?.response?.data?.detail || e?.message || "Create failed");
-    }
-  };
-
-  const saveEdit = async () => {
-    if (!draft || !editingId) return;
-    const payload = toPayload(draft);
-    if (!payload.item_name) { alert("Item name gerekli."); return; }
-    try {
-      await apiPatch(`/business-cases/scenarios/boq-items/${editingId}`, payload);
-      cancelEdit();
-      await refresh();
-    } catch (e: any) {
-      alert((e instanceof ApiError && e.message) || e?.response?.data?.detail || e?.message || "Update failed");
-    }
-  };
-
-  const onDelete = async (it: ScenarioBOQItem) => {
-    if (!confirm(`Delete BOQ item "${it.item_name}"?`)) return;
-    try {
-      await apiDelete(`/business-cases/scenarios/boq-items/${it.id}`);
-      await refresh();
-    } catch (e: any) {
-      alert((e instanceof ApiError && e.message) || e?.response?.data?.detail || e?.message || "Delete failed");
-    }
-  };
+  // HTML month value string -> "YYYY-MM" | ""
+  const str =
+    value.year && value.month ? `${value.year}-${pad2(value.month)}` : "";
 
   return (
-    <div className="rounded-lg border p-3">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-medium">BOQ (Bill of Quantities)</div>
-        <button onClick={beginAdd} className="px-2 py-1 rounded border text-sm hover:bg-gray-50">
-          + Add BOQ Item
-        </button>
+    <input
+      type="month"
+      value={str}
+      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+        const v = e.target.value; // "2026-03" | ""
+        if (!v) {
+          onChange({ year: null, month: null });
+          return;
+        }
+        const [y, m] = v.split("-").map((t) => Number(t));
+        onChange({
+          year: Number.isFinite(y) ? y : null,
+          month: Number.isFinite(m) ? m : null,
+        });
+      }}
+      className={cls(
+        "w-full px-2 py-1 rounded border border-gray-300 focus:outline-none focus:ring",
+        className
+      )}
+    />
+  );
+}
+
+const CATEGORY_OPTIONS: Array<BOQItem["category"]> = [
+  "bulk_with_freight",
+  "bulk_ex_freight",
+  "freight",
+];
+
+export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props) {
+  const [rows, setRows] = useState<BOQItem[]>([]);
+  const [draft, setDraft] = useState<BOQItem | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data = await apiGet<BOQItem[]>(`/scenarios/${scenarioId}/boq`);
+      setRows(data);
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || e?.message || "Failed to load BOQ.");
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    if (scenarioId) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioId]);
+
+  // toplamları basitçe hesapla (Excel’deki satır GM = qty*(price-cogs))
+  const totals = useMemo(() => {
+    let rev = 0,
+      cogs = 0,
+      gm = 0;
+    for (const r of rows) {
+      const lineRev = num(r.quantity) * num(r.unit_price);
+      const lineCogs = num(r.quantity) * num(r.unit_cogs || 0);
+      rev += lineRev;
+      cogs += lineCogs;
+      gm += lineRev - lineCogs;
+    }
+    return { rev, cogs, gm };
+  }, [rows]);
+
+  function startAdd() {
+    setDraft({
+      section: "",
+      category: "bulk_with_freight",
+      item_name: "",
+      unit: "",
+      quantity: 0,
+      unit_price: 0,
+      unit_cogs: 0,
+      frequency: "once",
+      months: null,
+      start_year: null,
+      start_month: null,
+      is_active: true,
+      notes: "",
+    });
+  }
+  function cancelAdd() {
+    setDraft(null);
+  }
+
+  async function saveNew() {
+    if (!draft) return;
+    try {
+      const created = await apiPost<BOQItem>(`/scenarios/${scenarioId}/boq`, {
+        ...draft,
+        quantity: num(draft.quantity),
+        unit_price: num(draft.unit_price),
+        unit_cogs: draft.unit_cogs == null ? null : num(draft.unit_cogs),
+        months: draft.months == null ? null : num(draft.months),
+      });
+      setRows((p) => [...p, created]);
+      setDraft(null);
+      onChanged?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Save failed.");
+    }
+  }
+
+  async function saveEdit(r: BOQItem) {
+    if (!r.id) return;
+    try {
+      const upd = await apiPut<BOQItem>(`/scenarios/${scenarioId}/boq/${r.id}`, {
+        ...r,
+        quantity: num(r.quantity),
+        unit_price: num(r.unit_price),
+        unit_cogs: r.unit_cogs == null ? null : num(r.unit_cogs),
+        months: r.months == null ? null : num(r.months),
+      });
+      setRows((p) => p.map((x) => (x.id === r.id ? upd : x)));
+      onChanged?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Update failed.");
+    }
+  }
+
+  async function delRow(r: BOQItem) {
+    if (!r.id) return;
+    if (!confirm("Delete BOQ item?")) return;
+    try {
+      await apiDelete(`/scenarios/${scenarioId}/boq/${r.id}`);
+      setRows((p) => p.filter((x) => x.id !== r.id));
+      onChanged?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Delete failed.");
+    }
+  }
+
+  async function markReady() {
+    if (!confirm("Mark BOQ as ready and move to TWC?")) return;
+    try {
+      await apiPost(`/scenarios/${scenarioId}/boq/mark-ready`, {});
+      onChanged?.();
+      onMarkedReady?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Cannot mark as ready.");
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-lg">BOQ (Bill of Quantities)</h3>
+        <div className="flex gap-2">
+          <button
+            onClick={load}
+            className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            disabled={loading}
+          >
+            Refresh
+          </button>
+          <button
+            onClick={startAdd}
+            className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+          >
+            + Add BOQ Item
+          </button>
+          <button
+            onClick={markReady}
+            className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+          >
+            Mark BOQ Ready → TWC
+          </button>
+        </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-xs">
-          <thead>
-            <tr className="border-b">
-              <th className="py-1 px-2 text-left">Section</th>
-              <th className="py-1 px-2 text-left">Item</th>
-              <th className="py-1 px-2 text-left">Unit</th>
-              <th className="py-1 px-2 text-right">Qty</th>
-              <th className="py-1 px-2 text-right">Unit Price</th>
-              <th className="py-1 px-2 text-right">Unit COGS</th>
-              <th className="py-1 px-2 text-left">Freq</th>
-              <th className="py-1 px-2 text-right">Months</th>
-              <th className="py-1 px-2 text-right">Start (Y/M)</th>
-              <th className="py-1 px-2 text-center">Active</th>
-              <th className="py-1 px-2 text-right">Line Rev</th>
-              <th className="py-1 px-2 text-right">Line COGS</th>
-              <th className="py-1 px-2 text-right">Line GM</th>
-              <th className="py-1 px-2 text-right w-40">Actions</th>
+      {err && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded">
+          {err}
+        </div>
+      )}
+
+      <div className="overflow-x-auto border rounded bg-white">
+        <table className="min-w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-3 py-2">Section</th>
+              <th className="px-3 py-2">Category</th>
+              <th className="px-3 py-2">Item</th>
+              <th className="px-3 py-2">Unit</th>
+              <th className="px-3 py-2 text-right">Qty</th>
+              <th className="px-3 py-2 text-right">Unit Price</th>
+              <th className="px-3 py-2 text-right">Unit COGS</th>
+              <th className="px-3 py-2">Freq</th>
+              <th className="px-3 py-2 text-right">Months</th>
+              <th className="px-3 py-2">Start (Y/M)</th>
+              <th className="px-3 py-2">Active</th>
+              <th className="px-3 py-2 text-right">Line Rev</th>
+              <th className="px-3 py-2 text-right">Line COGS</th>
+              <th className="px-3 py-2 text-right">Line GM</th>
+              <th className="px-3 py-2 w-36">Actions</th>
             </tr>
           </thead>
+
           <tbody>
-            {adding && draft && (
-              <tr className="border-b bg-yellow-50/40">
-                <td className="py-1 px-2">
-                  <input value={draft.section ?? ""} onChange={(e) => setDraft({ ...draft, section: e.target.value })} className="w-28 px-2 py-1 rounded border" />
+            {draft && (
+              <tr className="bg-amber-50/40">
+                <td className="px-3 py-2">
+                  <input
+                    className="w-full px-2 py-1 rounded border border-gray-300"
+                    value={draft.section ?? ""}
+                    onChange={(e) => setDraft({ ...draft, section: e.target.value })}
+                  />
                 </td>
-                <td className="py-1 px-2">
-                  <input value={draft.item_name} onChange={(e) => setDraft({ ...draft, item_name: e.target.value })} className="w-48 px-2 py-1 rounded border" />
+                <td className="px-3 py-2">
+                  <select
+                    className="w-full px-2 py-1 rounded border border-gray-300"
+                    value={draft.category ?? "bulk_with_freight"}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        category: e.target.value as BOQItem["category"],
+                      })
+                    }
+                  >
+                    {CATEGORY_OPTIONS.map((c) => (
+                      <option key={c || "none"} value={c || "bulk_with_freight"}>
+                        {c === "bulk_with_freight"
+                          ? "Bulk (w/ Freight)"
+                          : c === "bulk_ex_freight"
+                          ? "Bulk (ex Freight)"
+                          : "Freight"}
+                      </option>
+                    ))}
+                  </select>
                 </td>
-                <td className="py-1 px-2">
-                  <input value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value })} className="w-20 px-2 py-1 rounded border" />
+                <td className="px-3 py-2">
+                  <input
+                    className="w-full px-2 py-1 rounded border border-gray-300"
+                    value={draft.item_name}
+                    onChange={(e) => setDraft({ ...draft, item_name: e.target.value })}
+                  />
                 </td>
-                <td className="py-1 px-2 text-right">
-                  <input type="number" value={draft.quantity} onChange={(e) => setDraft({ ...draft, quantity: e.target.value })} className="w-24 px-2 py-1 rounded border text-right" />
+                <td className="px-3 py-2">
+                  <input
+                    className="w-full px-2 py-1 rounded border border-gray-300"
+                    value={draft.unit}
+                    onChange={(e) => setDraft({ ...draft, unit: e.target.value })}
+                  />
                 </td>
-                <td className="py-1 px-2 text-right">
-                  <input type="number" value={draft.unit_price} onChange={(e) => setDraft({ ...draft, unit_price: e.target.value })} className="w-24 px-2 py-1 rounded border text-right" />
+                <td className="px-3 py-2">
+                  <input
+                    type="number"
+                    className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                    value={draft.quantity}
+                    onChange={(e) =>
+                      setDraft({ ...draft, quantity: Number(e.target.value) })
+                    }
+                  />
                 </td>
-                <td className="py-1 px-2 text-right">
-                  <input type="number" value={draft.unit_cogs} onChange={(e) => setDraft({ ...draft, unit_cogs: e.target.value })} className="w-24 px-2 py-1 rounded border text-right" />
+                <td className="px-3 py-2">
+                  <input
+                    type="number"
+                    className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                    value={draft.unit_price}
+                    onChange={(e) =>
+                      setDraft({ ...draft, unit_price: Number(e.target.value) })
+                    }
+                  />
                 </td>
-                <td className="py-1 px-2">
-                  <select value={draft.frequency} onChange={(e) => setDraft({ ...draft, frequency: e.target.value as BOQFrequency })} className="px-2 py-1 rounded border">
+                <td className="px-3 py-2">
+                  <input
+                    type="number"
+                    className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                    value={draft.unit_cogs ?? 0}
+                    onChange={(e) =>
+                      setDraft({ ...draft, unit_cogs: Number(e.target.value) })
+                    }
+                  />
+                </td>
+                <td className="px-3 py-2">
+                  <select
+                    className="w-full px-2 py-1 rounded border border-gray-300"
+                    value={draft.frequency}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        frequency: e.target.value as BOQItem["frequency"],
+                      })
+                    }
+                  >
                     <option value="once">once</option>
                     <option value="monthly">monthly</option>
                     <option value="per_shipment">per_shipment</option>
                     <option value="per_tonne">per_tonne</option>
                   </select>
                 </td>
-                <td className="py-1 px-2 text-right">
-                  <input type="number" value={draft.months ?? ""} onChange={(e) => setDraft({ ...draft, months: e.target.value })} className="w-20 px-2 py-1 rounded border text-right" />
+                <td className="px-3 py-2">
+                  <input
+                    type="number"
+                    className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                    value={draft.months ?? ""}
+                    onChange={(e) =>
+                      setDraft({
+                        ...draft,
+                        months: e.target.value === "" ? null : Number(e.target.value),
+                      })
+                    }
+                  />
                 </td>
-                <td className="py-1 px-2 text-right">
-                  <div className="flex gap-1">
-                    <input placeholder="YYYY" type="number" value={draft.start_year ?? ""} onChange={(e) => setDraft({ ...draft, start_year: e.target.value })} className="w-20 px-2 py-1 rounded border text-right" />
-                    <input placeholder="MM" type="number" value={draft.start_month ?? ""} onChange={(e) => setDraft({ ...draft, start_month: e.target.value })} className="w-14 px-2 py-1 rounded border text-right" />
+                <td className="px-3 py-2">
+                  {/* Yıl/Ay yerine tek month-picker */}
+                  <MonthInput
+                    value={{
+                      year: draft.start_year ?? null,
+                      month: draft.start_month ?? null,
+                    }}
+                    onChange={({ year, month }) =>
+                      setDraft({ ...draft, start_year: year, start_month: month })
+                    }
+                  />
+                </td>
+                <td className="px-3 py-2 text-center">
+                  <input
+                    type="checkbox"
+                    checked={!!draft.is_active}
+                    onChange={(e) => setDraft({ ...draft, is_active: e.target.checked })}
+                  />
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {num(draft.quantity * draft.unit_price)}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {num(draft.quantity * (draft.unit_cogs ?? 0))}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {num(
+                    draft.quantity * draft.unit_price -
+                      draft.quantity * (draft.unit_cogs ?? 0)
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  <div className="flex gap-2">
+                    <button
+                      onClick={saveNew}
+                      className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                    >
+                      Save
+                    </button>
+                    <button
+                      onClick={cancelAdd}
+                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                    >
+                      Cancel
+                    </button>
                   </div>
-                </td>
-                <td className="py-1 px-2 text-center">
-                  <input type="checkbox" checked={draft.is_active} onChange={(e) => setDraft({ ...draft, is_active: e.target.checked })} />
-                </td>
-                <td className="py-1 px-2 text-right">{fmt(Number(draft.quantity || 0) * Number(draft.unit_price || 0) * (draft.frequency === "monthly" && Number(draft.months || 0) > 0 ? Number(draft.months) : 1))}</td>
-                <td className="py-1 px-2 text-right">{fmt(Number(draft.quantity || 0) * Number(draft.unit_cogs || 0) * (draft.frequency === "monthly" && Number(draft.months || 0) > 0 ? Number(draft.months) : 1))}</td>
-                <td className="py-1 px-2 text-right">{fmt(Number(draft.quantity || 0) * (Number(draft.unit_price || 0) - Number(draft.unit_cogs || 0)) * (draft.frequency === "monthly" && Number(draft.months || 0) > 0 ? Number(draft.months) : 1))}</td>
-                <td className="py-1 px-2 text-right">
-                  <button onClick={saveAdd} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">Save</button>
-                  <button onClick={cancelEdit} className="px-2 py-1 rounded border hover:bg-gray-50">Cancel</button>
                 </td>
               </tr>
             )}
 
-            {items.length === 0 && !adding && (
-              <tr><td colSpan={14} className="py-2 text-gray-500">No BOQ items.</td></tr>
-            )}
-
-            {items.map((it) => {
-              const editing = editingId === it.id && draft;
-              const lt = lineTotals(it);
-
-              if (editing) {
-                return (
-                  <tr key={it.id} className="border-b bg-yellow-50/40">
-                    <td className="py-1 px-2"><input value={draft!.section ?? ""} onChange={(e) => setDraft({ ...draft!, section: e.target.value })} className="w-28 px-2 py-1 rounded border" /></td>
-                    <td className="py-1 px-2"><input value={draft!.item_name} onChange={(e) => setDraft({ ...draft!, item_name: e.target.value })} className="w-48 px-2 py-1 rounded border" /></td>
-                    <td className="py-1 px-2"><input value={draft!.unit} onChange={(e) => setDraft({ ...draft!, unit: e.target.value })} className="w-20 px-2 py-1 rounded border" /></td>
-                    <td className="py-1 px-2 text-right"><input type="number" value={draft!.quantity} onChange={(e) => setDraft({ ...draft!, quantity: e.target.value })} className="w-24 px-2 py-1 rounded border text-right" /></td>
-                    <td className="py-1 px-2 text-right"><input type="number" value={draft!.unit_price} onChange={(e) => setDraft({ ...draft!, unit_price: e.target.value })} className="w-24 px-2 py-1 rounded border text-right" /></td>
-                    <td className="py-1 px-2 text-right"><input type="number" value={draft!.unit_cogs} onChange={(e) => setDraft({ ...draft!, unit_cogs: e.target.value })} className="w-24 px-2 py-1 rounded border text-right" /></td>
-                    <td className="py-1 px-2">
-                      <select value={draft!.frequency} onChange={(e) => setDraft({ ...draft!, frequency: e.target.value as BOQFrequency })} className="px-2 py-1 rounded border">
-                        <option value="once">once</option>
-                        <option value="monthly">monthly</option>
-                        <option value="per_shipment">per_shipment</option>
-                        <option value="per_tonne">per_tonne</option>
-                      </select>
-                    </td>
-                    <td className="py-1 px-2 text-right"><input type="number" value={draft!.months ?? ""} onChange={(e) => setDraft({ ...draft!, months: e.target.value })} className="w-20 px-2 py-1 rounded border text-right" /></td>
-                    <td className="py-1 px-2 text-right">
-                      <div className="flex gap-1">
-                        <input placeholder="YYYY" type="number" value={draft!.start_year ?? ""} onChange={(e) => setDraft({ ...draft!, start_year: e.target.value })} className="w-20 px-2 py-1 rounded border text-right" />
-                        <input placeholder="MM" type="number" value={draft!.start_month ?? ""} onChange={(e) => setDraft({ ...draft!, start_month: e.target.value })} className="w-14 px-2 py-1 rounded border text-right" />
-                      </div>
-                    </td>
-                    <td className="py-1 px-2 text-center"><input type="checkbox" checked={draft!.is_active} onChange={(e) => setDraft({ ...draft!, is_active: e.target.checked })} /></td>
-                    <td className="py-1 px-2 text-right">{fmt(Number(draft!.quantity || 0) * Number(draft!.unit_price || 0) * (draft!.frequency === "monthly" && Number(draft!.months || 0) > 0 ? Number(draft!.months) : 1))}</td>
-                    <td className="py-1 px-2 text-right">{fmt(Number(draft!.quantity || 0) * Number(draft!.unit_cogs || 0) * (draft!.frequency === "monthly" && Number(draft!.months || 0) > 0 ? Number(draft!.months) : 1))}</td>
-                    <td className="py-1 px-2 text-right">{fmt(Number(draft!.quantity || 0) * (Number(draft!.unit_price || 0) - Number(draft!.unit_cogs || 0)) * (draft!.frequency === "monthly" && Number(draft!.months || 0) > 0 ? Number(draft!.months) : 1))}</td>
-                    <td className="py-1 px-2 text-right">
-                      <button onClick={saveEdit} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">Save</button>
-                      <button onClick={cancelEdit} className="px-2 py-1 rounded border hover:bg-gray-50">Cancel</button>
-                    </td>
-                  </tr>
-                );
-              }
+            {rows.map((r) => {
+              const lineRev = num(r.quantity) * num(r.unit_price);
+              const lineCogs = num(r.quantity) * num(r.unit_cogs || 0);
+              const lineGM = lineRev - lineCogs;
 
               return (
-                <tr key={it.id} className="border-b">
-                  <td className="py-1 px-2">{it.section}</td>
-                  <td className="py-1 px-2">{it.item_name}</td>
-                  <td className="py-1 px-2">{it.unit}</td>
-                  <td className="py-1 px-2 text-right">{fmt(it.quantity)}</td>
-                  <td className="py-1 px-2 text-right">{fmt(it.unit_price)}</td>
-                  <td className="py-1 px-2 text-right">{fmt(it.unit_cogs ?? 0)}</td>
-                  <td className="py-1 px-2">{it.frequency}</td>
-                  <td className="py-1 px-2 text-right">{it.months ?? "-"}</td>
-                  <td className="py-1 px-2 text-right">
-                    {it.start_year ? `${it.start_year}/${String(it.start_month ?? "").padStart(2, "0")}` : "-"}
+                <tr key={r.id} className="odd:bg-white even:bg-gray-50">
+                  <td className="px-3 py-2">
+                    <input
+                      className="w-full px-2 py-1 rounded border border-gray-300"
+                      value={r.section ?? ""}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id ? { ...x, section: e.target.value } : x
+                          )
+                        )
+                      }
+                    />
                   </td>
-                  <td className="py-1 px-2 text-center">{it.is_active ? "✓" : "—"}</td>
-                  <td className="py-1 px-2 text-right">{fmt(lt.revenue)}</td>
-                  <td className="py-1 px-2 text-right">{fmt(lt.cogs)}</td>
-                  <td className="py-1 px-2 text-right">{fmt(lt.gm)}</td>
-                  <td className="py-1 px-2 text-right">
-                    <button onClick={() => beginEdit(it)} className="px-2 py-1 rounded border mr-2 hover:bg-gray-50">Edit</button>
-                    <button onClick={() => onDelete(it)} className="px-2 py-1 rounded border hover:bg-gray-50">Delete</button>
+                  <td className="px-3 py-2">
+                    <select
+                      className="w-full px-2 py-1 rounded border border-gray-300"
+                      value={r.category ?? "bulk_with_freight"}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id
+                              ? {
+                                  ...x,
+                                  category: e.target.value as BOQItem["category"],
+                                }
+                              : x
+                          )
+                        )
+                      }
+                    >
+                      {CATEGORY_OPTIONS.map((c) => (
+                        <option key={c || "none"} value={c || "bulk_with_freight"}>
+                          {c === "bulk_with_freight"
+                            ? "Bulk (w/ Freight)"
+                            : c === "bulk_ex_freight"
+                            ? "Bulk (ex Freight)"
+                            : "Freight"}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      className="w-full px-2 py-1 rounded border border-gray-300"
+                      value={r.item_name}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id ? { ...x, item_name: e.target.value } : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      className="w-full px-2 py-1 rounded border border-gray-300"
+                      value={r.unit}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id ? { ...x, unit: e.target.value } : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="number"
+                      className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                      value={r.quantity}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id ? { ...x, quantity: Number(e.target.value) } : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="number"
+                      className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                      value={r.unit_price}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id
+                              ? { ...x, unit_price: Number(e.target.value) }
+                              : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="number"
+                      className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                      value={r.unit_cogs ?? 0}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id
+                              ? { ...x, unit_cogs: Number(e.target.value) }
+                              : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <select
+                      className="w-full px-2 py-1 rounded border border-gray-300"
+                      value={r.frequency}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id
+                              ? {
+                                  ...x,
+                                  frequency: e.target.value as BOQItem["frequency"],
+                                }
+                              : x
+                          )
+                        )
+                      }
+                    >
+                      <option value="once">once</option>
+                      <option value="monthly">monthly</option>
+                      <option value="per_shipment">per_shipment</option>
+                      <option value="per_tonne">per_tonne</option>
+                    </select>
+                  </td>
+                  <td className="px-3 py-2">
+                    <input
+                      type="number"
+                      className="w-full px-2 py-1 rounded border border-gray-300 text-right"
+                      value={r.months ?? ""}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id
+                              ? {
+                                  ...x,
+                                  months:
+                                    e.target.value === ""
+                                      ? null
+                                      : Number(e.target.value),
+                                }
+                              : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2">
+                    <MonthInput
+                      value={{ year: r.start_year ?? null, month: r.start_month ?? null }}
+                      onChange={({ year, month }) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id
+                              ? { ...x, start_year: year, start_month: month }
+                              : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-center">
+                    <input
+                      type="checkbox"
+                      checked={!!r.is_active}
+                      onChange={(e) =>
+                        setRows((p) =>
+                          p.map((x) =>
+                            x.id === r.id ? { ...x, is_active: e.target.checked } : x
+                          )
+                        )
+                      }
+                    />
+                  </td>
+                  <td className="px-3 py-2 text-right">{lineRev}</td>
+                  <td className="px-3 py-2 text-right">{lineCogs}</td>
+                  <td className="px-3 py-2 text-right">{lineGM}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => saveEdit(r)}
+                        className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                      >
+                        Save
+                      </button>
+                      <button
+                        onClick={() => delRow(r)}
+                        className="px-3 py-1 rounded bg-rose-600 text-white hover:bg-rose-700"
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -299,11 +630,13 @@ export default function BOQTable({
           </tbody>
 
           <tfoot>
-            <tr className="border-t font-medium">
-              <td colSpan={10} className="py-1 px-2 text-right">Totals:</td>
-              <td className="py-1 px-2 text-right">{fmt(totals.revenue)}</td>
-              <td className="py-1 px-2 text-right">{fmt(totals.cogs)}</td>
-              <td className="py-1 px-2 text-right">{fmt(totals.gm)}</td>
+            <tr className="bg-gray-100 font-semibold">
+              <td className="px-3 py-2" colSpan={12}>
+                Totals
+              </td>
+              <td className="px-3 py-2 text-right">{totals.rev}</td>
+              <td className="px-3 py-2 text-right">{totals.cogs}</td>
+              <td className="px-3 py-2 text-right">{totals.gm}</td>
               <td />
             </tr>
           </tfoot>

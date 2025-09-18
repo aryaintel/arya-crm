@@ -1,7 +1,7 @@
 # backend/app/main.py
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-
+from app.api import twc  # <-- yeni
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
 from .api import (
@@ -15,8 +15,9 @@ from .api import (
     leads,
     business_cases,      # Business Case & Scenario API
     scenario_overheads,  # Overheads router
-    scenario_boq,        # BOQ router
-    scenario_capex,      # NEW: CAPEX router
+    scenario_capex,      # CAPEX router
+    boq,                 # NEW: BOQ router (scenario_boq yerine)
+    workflow,            # NEW: Workflow router (BOQ -> TWC -> CAPEX)
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -70,5 +71,8 @@ app.include_router(secure.router)
 app.include_router(leads.router)
 app.include_router(business_cases.router)
 app.include_router(scenario_overheads.router)
-app.include_router(scenario_boq.router)
-app.include_router(scenario_capex.router)  # NEW
+# Not: scenario_boq.router artık kullanılmıyor; yerine boq.router var
+app.include_router(boq.router)          # NEW
+app.include_router(workflow.router)     # NEW
+app.include_router(scenario_capex.router)
+app.include_router(twc.router)

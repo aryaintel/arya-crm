@@ -1,499 +1,324 @@
-import { useMemo, useState } from "react";
-import type {
-  ScenarioDetail,
-  CapexRow,
-  FinanceMode,
-  PLResponse,
-} from "../../../types/scenario";
-import { Card, Field, KV } from "../../../components/ui";
-import {
-  fmt,
-  fmtMonthYY,
-  getNumberClass,
-  FIRST_COL_W,
-  MONTH_COL_W,
-} from "../../../utils/format";
-import { isInWindow, monthIndex } from "../../../utils/scenarioWindow";
+// frontend/src/pages/scenario/tabs/TWCTab.tsx
+import type React from "react";
+import { useEffect, useMemo, useState } from "react";
+import { apiGet, apiPut, apiPost } from "../../../lib/api";
 
-export default function TWCTab({
-  data,
-  pl,
-}: {
-  data: ScenarioDetail;
-  pl: PLResponse | null;
-}) {
-  // ---- inputs ----
-  const [mode, setMode] = useState<FinanceMode>("fcf");
-  const [wacc, setWacc] = useState("12");
-  const [taxRate, setTaxRate] = useState("25");
-  const [capexRows, setCapexRows] = useState<CapexRow[]>([]);
-  const [deprLifeYears, setDeprLifeYears] = useState("5");
-  const [deprStart, setDeprStart] = useState<"next" | "same">("next");
-  const [treatFirstAsT0, setTreatFirstAsT0] = useState(true);
-  const [dso, setDso] = useState("45");
-  const [dpo, setDpo] = useState("30");
-  const [dio, setDio] = useState("60");
+type Props = {
+  scenarioId: number;
+  onMarkedReady?: () => void; // workflow ilerletildiğinde çağrılır
+};
 
-  // scenario start YM (UTC)
-  const startDate = new Date(data.start_date);
-  const startY = startDate.getUTCFullYear();
-  const startM = startDate.getUTCMonth() + 1;
+type TWCIn = {
+  twc_dso_days?: number | string;
+  twc_dpo_days?: number | string;
+  twc_dio_days?: number | string;
+  twc_freight_pct_of_sales?: number | string;
+  twc_safety_stock_pct_cogs?: number | string;
+  twc_other_wc_fixed?: number | string;
+};
+type TWCOut = TWCIn & { scenario_id: number };
 
-  // ---- capex table ops ----
-  const addCapexRow = () =>
-    setCapexRows((r) => [...r, { year: startY, month: startM, amount: 0 }]);
-  const changeCapexRow = (i: number, next: CapexRow) =>
-    setCapexRows((rows) => rows.map((r, idx) => (idx === i ? next : r)));
-  const removeCapexRow = (i: number) =>
-    setCapexRows((rows) => rows.filter((_, idx) => idx !== i));
+type TWCBucket = {
+  year: number;
+  month: number;
+  revenue: number;
+  cogs: number;
+  freight: number;
+  ar: number;
+  ap: number;
+  inv: number;
+  nwc: number;
+};
+type TWCPreview = {
+  scenario_id: number;
+  assumptions: TWCOut;
+  monthly: TWCBucket[];
+  totals: Record<string, number>;
+};
 
-  // ---- finance calc ----
-  const finance = useMemo(() => {
-    const months = data.months;
-    const annual = Number(wacc || "0") / 100;
-    const r = Math.pow(1 + annual, 1 / 12) - 1;
+function num(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function cls(...a: (string | false | undefined)[]) {
+  return a.filter(Boolean).join(" ");
+}
 
-    const plMonths = pl?.months ?? [];
-    const havePL = plMonths.length === months;
+// null güvenli birleştirme — TWC state’i yoksa default’la başlatır
+function mergeTWC(
+  current: TWCOut | null,
+  patch: Partial<TWCOut>,
+  scenarioId: number
+): TWCOut {
+  const base: TWCOut = {
+    scenario_id: scenarioId,
+    twc_dso_days: 45,
+    twc_dpo_days: 30,
+    twc_dio_days: 20,
+    twc_freight_pct_of_sales: 0,
+    twc_safety_stock_pct_cogs: 0,
+    twc_other_wc_fixed: 0,
+  };
+  return { ...(current ?? base), ...patch };
+}
 
-    // series
-    const ebit: number[] = new Array(months).fill(0);
-    const revenue: number[] = new Array(months).fill(0);
-    const cogs: number[] = new Array(months).fill(0);
-    if (havePL) {
-      for (let i = 0; i < months; i++) {
-        ebit[i] = plMonths[i].ebit ?? 0;
-        revenue[i] = plMonths[i].revenue ?? 0;
-        cogs[i] = plMonths[i].cogs ?? 0;
-      }
+export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
+  const [twc, setTwc] = useState<TWCOut | null>(null);
+  const [pv, setPv] = useState<TWCPreview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    setErr(null);
+    try {
+      const data = await apiGet<TWCOut>(`/scenarios/${scenarioId}/twc`);
+      setTwc(data);
+    } catch (e: any) {
+      setErr(e?.message || "Failed to load TWC.");
+    } finally {
+      setLoading(false);
     }
+  }
 
-    // capex timeline
-    const capex: number[] = new Array(months).fill(0);
-    for (const row of capexRows) {
-      if (!isInWindow(data, row.year, row.month)) continue;
-      const idx = monthIndex(data, row.year, row.month);
-      if (idx >= 0 && idx < months) capex[idx] += Number(row.amount || 0);
+  useEffect(() => {
+    if (scenarioId) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioId]);
+
+  async function save() {
+    if (!twc) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      const payload: TWCIn = {
+        twc_dso_days: num(twc.twc_dso_days),
+        twc_dpo_days: num(twc.twc_dpo_days),
+        twc_dio_days: num(twc.twc_dio_days),
+        twc_freight_pct_of_sales: num(twc.twc_freight_pct_of_sales),
+        twc_safety_stock_pct_cogs: num(twc.twc_safety_stock_pct_cogs),
+        twc_other_wc_fixed: num(twc.twc_other_wc_fixed),
+      };
+      const res = await apiPut<TWCOut>(`/scenarios/${scenarioId}/twc`, payload);
+      setTwc(res);
+      alert("TWC saved.");
+    } catch (e: any) {
+      setErr(e?.response?.data?.detail || e?.message || "Save failed.");
+    } finally {
+      setSaving(false);
     }
+  }
 
-    // t0 treatment
-    let t0 = 0;
-    if (treatFirstAsT0) {
-      let firstMonthCapex = 0;
-      for (const row of capexRows) {
-        if (row.year === startY && row.month === startM)
-          firstMonthCapex += Number(row.amount || 0);
-      }
-      if (firstMonthCapex !== 0) {
-        t0 -= firstMonthCapex;
-        capex[0] = Math.max(0, (capex[0] || 0) - firstMonthCapex);
-      }
+  async function preview() {
+    setErr(null);
+    try {
+      const res = await apiPost<TWCPreview>(`/scenarios/${scenarioId}/twc/preview`, {});
+      setPv(res);
+    } catch (e: any) {
+      setPv(null);
+      setErr(e?.response?.data?.detail || e?.message || "Preview failed.");
     }
+  }
 
-    // depreciation
-    const lifeMonths = Math.max(1, Math.round(Number(deprLifeYears || "1") * 12));
-    const depreciation: number[] = new Array(months).fill(0);
-    const startOffset = deprStart === "next" ? 1 : 0;
-    for (let t = 0; t < months; t++) {
-      const c = capex[t];
-      if (c > 0 && lifeMonths > 0) {
-        const perMonth = c / lifeMonths;
-        for (let k = 0; k < lifeMonths; k++) {
-          const idx = t + startOffset + k;
-          if (idx < months) depreciation[idx] += perMonth;
-        }
-      }
+  async function markReady() {
+    if (!confirm("Mark TWC as ready and move to CAPEX?")) return;
+    try {
+      await apiPost(`/scenarios/${scenarioId}/workflow/mark-twc-ready`, {});
+      alert("Workflow moved to CAPEX.");
+      onMarkedReady?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Cannot mark TWC as ready.");
     }
+  }
 
-    // taxes (only on positive EBIT)
-    const taxMonthlyRate = Number(taxRate || "0") / 100 / 12;
-    const taxes: number[] = ebit.map((e) => (e > 0 ? e * taxMonthlyRate : 0));
-
-    // working capital
-    const ds = Number(dso || "0");
-    const dp = Number(dpo || "0");
-    const di = Number(dio || "0");
-    const ar: number[] = new Array(months).fill(0);
-    const inv: number[] = new Array(months).fill(0);
-    const ap: number[] = new Array(months).fill(0);
-    const nwc: number[] = new Array(months).fill(0);
-    if (havePL) {
-      for (let i = 0; i < months; i++) {
-        ar[i] = revenue[i] * (ds / 30);
-        inv[i] = cogs[i] * (di / 30);
-        ap[i] = cogs[i] * (dp / 30);
-        nwc[i] = ar[i] + inv[i] - ap[i];
-      }
-    }
-    const deltaWC: number[] = new Array(months).fill(0);
-    for (let i = 0; i < months; i++) {
-      const prev = i === 0 ? 0 : nwc[i - 1];
-      deltaWC[i] = nwc[i] - prev; // increase -> cash out
-    }
-
-    // FCF
-    const fcf: number[] = new Array(months).fill(0);
-    for (let i = 0; i < months; i++) {
-      fcf[i] =
-        (ebit[i] ?? 0) - taxes[i] + depreciation[i] - capex[i] - deltaWC[i];
-    }
-
-    // NPV / IRR
-    const npv = (cf: number[], rate: number) =>
-      cf.reduce((acc, v, i) => acc + v / Math.pow(1 + rate, i + 1), 0);
-    const irr = (cf0: number, cf: number[]) => {
-      let lo = -0.99,
-        hi = 10;
-      const f = (rr: number) =>
-        cf0 + cf.reduce((acc, v, i) => acc + v / Math.pow(1 + rr, i + 1), 0);
-      for (let it = 0; it < 120; it++) {
-        const mid = (lo + hi) / 2;
-        const val = f(mid);
-        if (Math.abs(val) < 1e-9) return mid;
-        if (val > 0) lo = mid;
-        else hi = mid;
-      }
-      return (lo + hi) / 2;
-    };
-
-    const selectedCF =
-      mode === "proxy" && havePL
-        ? plMonths.map((m) => m.net_income ?? 0)
-        : fcf;
-    const projectNPV = t0 + npv(selectedCF, r);
-    const irrMonthly = selectedCF.length > 0 ? irr(t0, selectedCF) : 0;
-    const irrAnnual = (1 + irrMonthly) ** 12 - 1;
-
-    // labels & preview
-    const labels = havePL
-      ? plMonths.map((m) => ({ y: m.year, m: m.month }))
-      : [];
-    const preview = [
-      "t0:" + fmt(t0),
-      ...selectedCF.slice(0, 8).map((v, i) => `t${i + 1}:${fmt(v)}`),
-    ].join(" | ");
-
+  const totalsFmt = useMemo(() => {
+    const t = pv?.totals || {};
+    const f = (x: any) => (typeof x === "number" ? x.toLocaleString() : x ?? 0);
     return {
-      rMonthly: r,
-      havePL,
-      npv: projectNPV,
-      irrMonthly,
-      irrAnnual,
-      preview,
-      cfBasis: mode === "proxy" ? "Net Income (proxy)" : "Free Cash Flow",
-      labels,
-      ebit,
-      taxes,
-      depreciation,
-      capex,
-      deltaWC,
-      fcf,
+      revenue: f(t["revenue"]),
+      cogs: f(t["cogs"]),
+      freight: f(t["freight"]),
+      ar: f(t["ar"]),
+      ap: f(t["ap"]),
+      inv: f(t["inv"]),
+      nwc: f(t["nwc"]),
     };
-  }, [
-    data,
-    pl,
-    mode,
-    wacc,
-    taxRate,
-    capexRows,
-    deprLifeYears,
-    deprStart,
-    treatFirstAsT0,
-    dso,
-    dpo,
-    dio,
-    startY,
-    startM,
-  ]);
+  }, [pv]);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      {/* Inputs */}
-      <Card>
-        <div className="text-sm font-medium mb-3">TWC / Cash Flow Inputs</div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Field label="WACC % (annual)">
-            <input
-              type="number"
-              value={wacc}
-              onChange={(e) => setWacc(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            />
-          </Field>
-          <Field label="Tax Rate % (annual)">
-            <input
-              type="number"
-              value={taxRate}
-              onChange={(e) => setTaxRate(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            />
-          </Field>
-          <Field label="Cash Flow Basis">
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value as FinanceMode)}
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            >
-              <option value="fcf">Free Cash Flow</option>
-              <option value="proxy">Net Income (proxy)</option>
-            </select>
-          </Field>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-          <Field label="DSO (days)">
-            <input
-              type="number"
-              value={dso}
-              onChange={(e) => setDso(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            />
-          </Field>
-          <Field label="DPO (days)">
-            <input
-              type="number"
-              value={dpo}
-              onChange={(e) => setDpo(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            />
-          </Field>
-          <Field label="DIO (days)">
-            <input
-              type="number"
-              value={dio}
-              onChange={(e) => setDio(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            />
-          </Field>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
-          <Field label="Depreciation Life (years)">
-            <input
-              type="number"
-              value={deprLifeYears}
-              min={1}
-              step={1}
-              onChange={(e) => setDeprLifeYears(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            />
-          </Field>
-          <Field label="Depreciation Starts">
-            <select
-              value={deprStart}
-              onChange={(e) =>
-                setDeprStart(e.target.value as "next" | "same")
-              }
-              className="w-full px-3 py-2 rounded-md border text-sm"
-            >
-              <option value="next">Next month</option>
-              <option value="same">Same month</option>
-            </select>
-          </Field>
-        </div>
-
-        <label className="flex items-center gap-2 text-sm mt-3">
-          <input
-            type="checkbox"
-            checked={treatFirstAsT0}
-            onChange={(e) => setTreatFirstAsT0(e.target.checked)}
-          />
-          Treat first-month Capex as <b>t0</b>
-        </label>
-      </Card>
-
-      {/* Capex */}
-      <Card>
-        <div className="flex items-center justify-between mb-3">
-          <div className="text-sm font-medium">Capex Plan (monthly)</div>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-lg">TWC Assumptions</h3>
+        <div className="flex gap-2">
+          <button onClick={load} className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200">
+            Refresh
+          </button>
           <button
-            onClick={addCapexRow}
-            className="px-2 py-1 rounded border text-sm hover:bg-gray-50"
+            onClick={save}
+            disabled={saving}
+            className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            + Add Row
+            Save
+          </button>
+          <button onClick={preview} className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200">
+            Preview NWC
+          </button>
+          <button
+            onClick={markReady}
+            className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+          >
+            Mark TWC Ready → CAPEX
           </button>
         </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left border-b">
-                <th className="py-1 pr-3">Year</th>
-                <th className="py-1 pr-3">Month</th>
-                <th className="py-1 pr-3">Amount</th>
-                <th className="py-1 pr-3 w-16" />
-              </tr>
-            </thead>
-            <tbody>
-              {capexRows.length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="py-2 text-gray-500">
-                    No capex yet.
-                  </td>
-                </tr>
-              ) : (
-                capexRows.map((r, idx) => {
-                  const out = !isInWindow(data, r.year, r.month);
-                  const danger = out ? "border-red-400 focus:ring-red-500" : "";
-                  return (
-                    <tr key={idx} className="border-b last:border-0">
-                      <td className="py-1 pr-3">
-                        <input
-                          type="number"
-                          value={r.year}
-                          onChange={(e) =>
-                            changeCapexRow(idx, {
-                              ...r,
-                              year: Number(e.target.value),
-                            })
-                          }
-                          className={`w-24 px-2 py-1 rounded border text-sm ${danger}`}
-                        />
-                      </td>
-                      <td className="py-1 pr-3">
-                        <input
-                          type="number"
-                          value={r.month}
-                          min={1}
-                          max={12}
-                          onChange={(e) =>
-                            changeCapexRow(idx, {
-                              ...r,
-                              month: Number(e.target.value),
-                            })
-                          }
-                          className={`w-20 px-2 py-1 rounded border text-sm ${danger}`}
-                        />
-                      </td>
-                      <td className="py-1 pr-3">
-                        <input
-                          type="number"
-                          value={r.amount}
-                          onChange={(e) =>
-                            changeCapexRow(idx, {
-                              ...r,
-                              amount: Number(e.target.value),
-                            })
-                          }
-                          className="w-32 px-2 py-1 rounded border text-sm"
-                        />
-                      </td>
-                      <td className="py-1 pr-3 text-right">
-                        <button
-                          onClick={() => removeCapexRow(idx)}
-                          className="px-2 py-1 rounded border hover:bg-gray-50"
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+      </div>
+
+      {err && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded">
+          {err}
         </div>
-      </Card>
+      )}
 
-      {/* Results */}
-      <Card>
-        <div className="text-sm font-medium mb-3">NPV / IRR</div>
-        {!finance?.havePL ? (
-          <div className="text-sm text-gray-500">Önce P&L hesapla.</div>
-        ) : (
-          <>
-            <KV
-              label="Monthly discount r"
-              value={`${(finance.rMonthly * 100).toFixed(4)} %`}
-            />
-            <KV label={`NPV (${finance.cfBasis})`} value={fmt(finance.npv)} />
-            <KV
-              label="IRR (monthly)"
-              value={`${(finance.irrMonthly * 100).toFixed(4)} %`}
-            />
-            <KV
-              label="IRR (annualized)"
-              value={`${(finance.irrAnnual * 100).toFixed(4)} %`}
-            />
-            <div className="text-xs text-gray-500 mt-3">
-              Preview (first 8):{" "}
-              <code className="text-[11px]">{finance.preview}</code>
-            </div>
-          </>
-        )}
-      </Card>
+      {loading ? (
+        <div className="text-sm text-gray-500">Loading…</div>
+      ) : (
+        <>
+          {/* Inputs */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Field label="DSO (days)">
+              <Input
+                type="number"
+                value={twc?.twc_dso_days ?? 45}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTwc((p) => mergeTWC(p, { twc_dso_days: e.target.value }, scenarioId))
+                }
+              />
+            </Field>
+            <Field label="DPO (days)">
+              <Input
+                type="number"
+                value={twc?.twc_dpo_days ?? 30}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTwc((p) => mergeTWC(p, { twc_dpo_days: e.target.value }, scenarioId))
+                }
+              />
+            </Field>
+            <Field label="DIO (days)">
+              <Input
+                type="number"
+                value={twc?.twc_dio_days ?? 20}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTwc((p) => mergeTWC(p, { twc_dio_days: e.target.value }, scenarioId))
+                }
+              />
+            </Field>
 
-      {/* Debug table */}
-      <div className="lg:col-span-3">
-        <Card>
-          <div className="text-sm font-medium mb-2">FCF Debug Table</div>
-          {!finance?.havePL ? (
-            <div className="text-sm text-gray-500">
-              Tabloyu görmek için önce P&L’i hesapla.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-max text-xs table-fixed">
-                <thead>
-                  <tr className="border-b">
-                    <th
-                      className="sticky left-0 bg-white py-1 px-2 text-left"
-                      style={{ width: FIRST_COL_W, minWidth: FIRST_COL_W }}
-                    >
-                      Line
-                    </th>
-                    {finance.labels.map((lm, i) => (
-                      <th
-                        key={i}
-                        className="py-1 px-2 text-right whitespace-nowrap"
-                        style={{ width: MONTH_COL_W, minWidth: MONTH_COL_W }}
-                      >
-                        {fmtMonthYY(lm.y, lm.m)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    { label: "EBIT", arr: finance.ebit },
-                    { label: "Tax (paid)", arr: finance.taxes },
-                    { label: "Depreciation", arr: finance.depreciation },
-                    { label: "Capex", arr: finance.capex },
-                    { label: "Δ Working Capital", arr: finance.deltaWC },
-                    {
-                      label: "FCF = EBIT − Tax + Dep − Capex − ΔWC",
-                      arr: finance.fcf,
-                    },
-                  ].map((row) => (
-                    <tr key={row.label} className="border-b last:border-0">
-                      <td
-                        className="sticky left-0 bg-white py-1 px-2 font-medium"
-                        style={{
-                          width: FIRST_COL_W,
-                          minWidth: FIRST_COL_W,
-                        }}
-                      >
-                        {row.label}
-                      </td>
-                      {row.arr.map((v: number, idx: number) => (
-                        <td
-                          key={idx}
-                          className={`py-1 px-2 text-right ${getNumberClass(
-                            v,
-                          )}`}
-                          style={{ width: MONTH_COL_W, minWidth: MONTH_COL_W }}
-                        >
-                          {fmt(v)}
-                        </td>
-                      ))}
+            <Field label="Freight (% of sales)">
+              <Input
+                type="number"
+                value={twc?.twc_freight_pct_of_sales ?? 0}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTwc((p) =>
+                    mergeTWC(p, { twc_freight_pct_of_sales: e.target.value }, scenarioId)
+                  )
+                }
+              />
+            </Field>
+            <Field label="Safety Stock (% of COGS)">
+              <Input
+                type="number"
+                value={twc?.twc_safety_stock_pct_cogs ?? 0}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTwc((p) =>
+                    mergeTWC(p, { twc_safety_stock_pct_cogs: e.target.value }, scenarioId)
+                  )
+                }
+              />
+            </Field>
+            <Field label="Other WC (fixed)">
+              <Input
+                type="number"
+                value={twc?.twc_other_wc_fixed ?? 0}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                  setTwc((p) => mergeTWC(p, { twc_other_wc_fixed: e.target.value }, scenarioId))
+                }
+              />
+            </Field>
+          </div>
+
+          {/* Preview */}
+          {pv && (
+            <div className="mt-3">
+              <h4 className="font-medium mb-2">Preview (Monthly)</h4>
+              <div className="overflow-x-auto border rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2">Y/M</th>
+                      <th className="px-3 py-2 text-right">Revenue</th>
+                      <th className="px-3 py-2 text-right">COGS</th>
+                      <th className="px-3 py-2 text-right">Freight</th>
+                      <th className="px-3 py-2 text-right">AR</th>
+                      <th className="px-3 py-2 text-right">AP</th>
+                      <th className="px-3 py-2 text-right">INV</th>
+                      <th className="px-3 py-2 text-right">NWC</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {pv.monthly.map((b, i) => (
+                      <tr key={i} className="odd:bg-white even:bg-gray-50">
+                        <td className="px-3 py-2">
+                          {b.year}/{String(b.month).padStart(2, "0")}
+                        </td>
+                        <td className="px-3 py-2 text-right">{b.revenue.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.cogs.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.freight.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.ar.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.ap.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.inv.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.nwc.toLocaleString()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-gray-100 font-semibold">
+                      <td className="px-3 py-2">Totals</td>
+                      <td className="px-3 py-2 text-right">{totalsFmt.revenue}</td>
+                      <td className="px-3 py-2 text-right">{totalsFmt.cogs}</td>
+                      <td className="px-3 py-2 text-right">{totalsFmt.freight}</td>
+                      <td className="px-3 py-2 text-right">{totalsFmt.ar}</td>
+                      <td className="px-3 py-2 text-right">{totalsFmt.ap}</td>
+                      <td className="px-3 py-2 text-right">{totalsFmt.inv}</td>
+                      <td className="px-3 py-2 text-right">{totalsFmt.nwc}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             </div>
           )}
-        </Card>
-      </div>
+        </>
+      )}
     </div>
+  );
+}
+
+/* ---- Small UI bits ---- */
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="text-sm">
+      <div className="text-gray-600 mb-1">{label}</div>
+      {children}
+    </label>
+  );
+}
+function Input(props: any) {
+  return (
+    <input
+      {...props}
+      className={cls(
+        "w-full px-2 py-1 rounded border border-gray-300 focus:outline-none focus:ring",
+        props.className
+      )}
+    />
   );
 }

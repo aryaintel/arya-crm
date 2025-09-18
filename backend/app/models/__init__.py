@@ -8,72 +8,66 @@ from sqlalchemy import (
     Date,
     ForeignKey,
     UniqueConstraint,
+    Index,
+    CheckConstraint,
     func,
     Numeric,
     Boolean,
-    Enum,  # BOQ category enum
 )
 from sqlalchemy.orm import declarative_base, relationship
 from ..core.config import engine
 
-# SQLAlchemy Base
 Base = declarative_base()
 
-
-# --------- Core Tables ---------
+# =========================
+# Core (Tenant / User / Role)
+# =========================
 class Tenant(Base):
     __tablename__ = "tenants"
-
     id = Column(Integer, primary_key=True, index=True)
-    slug = Column(String, unique=True, nullable=False)   # arya, demo vs.
-    name = Column(String, nullable=False)                # Arya Demo, Şirket Adı vs.
+    slug = Column(String, unique=True, nullable=False)  # arya, demo
+    name = Column(String, nullable=False)               # Arya Demo, Şirket Adı
 
 
 class User(Base):
     __tablename__ = "users"
-
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
 
     email = Column(String, nullable=False)
     password_hash = Column(String, nullable=False)
-
-    # Basit rol modeli: kullanıcı üzerinde rol adı tutuluyor (admin, sales, vs.)
     role_name = Column(String, nullable=False, default="user")
 
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (
-        # Aynı tenant içinde e-posta tekil olsun
         UniqueConstraint("tenant_id", "email", name="uix_user_tenant_email"),
     )
 
 
 class Role(Base):
     """
-    İsteğe bağlı rol tablosu (permissions string'i virgül ile ayrılmış listedir)
-    Örn: "accounts:read,accounts:write,contacts:read"
-    Admin için ayrıca '*' verilerek her şeye izin tanımlanabilir.
+    Basit rol modeli; permissions virgül ayrımlı string:
+    Örn: "accounts:read,accounts:write,contacts:read" veya admin için "*"
     """
     __tablename__ = "roles"
-
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
-
-    name = Column(String, nullable=False)        # admin, sales, support ...
-    permissions = Column(Text, nullable=True)    # "accounts:read,accounts:write,*" gibi
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)     # admin, sales, support ...
+    permissions = Column(Text, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "name", name="uix_role_tenant_name"),
     )
 
 
-# --------- Business Tables: Accounts / Contacts ---------
+# =========================
+# Accounts / Contacts
+# =========================
 class Account(Base):
     __tablename__ = "accounts"
-
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String, nullable=False)
     industry = Column(String, nullable=True)
@@ -83,30 +77,27 @@ class Account(Base):
     billing_address = Column(Text, nullable=True)
     shipping_address = Column(Text, nullable=True)
 
-    # --- Yeni (Salesforce benzeri) alanlar ---
+    # Opsiyonel alanlar (Salesforce benzeri)
     account_number = Column(String(50), nullable=True)
     employees = Column(Integer, nullable=True)
     annual_revenue = Column(Integer, nullable=True)
-    rating = Column(String(20), nullable=True)        # Hot | Warm | Cold
-    ownership = Column(String(20), nullable=True)     # Public | Private | Other
+    rating = Column(String(20), nullable=True)     # Hot | Warm | Cold
+    ownership = Column(String(20), nullable=True)  # Public | Private | Other
     description = Column(Text, nullable=True)
 
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
-    # relationships (isteğe bağlı)
     owner = relationship("User", lazy="selectin")
 
 
 class Contact(Base):
     __tablename__ = "contacts"
-
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
 
-    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
-    owner_id   = Column(Integer, ForeignKey("users.id"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    owner_id   = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
 
     name  = Column(String, nullable=False)
     email = Column(String, nullable=True)
@@ -116,71 +107,69 @@ class Contact(Base):
 
     created_at = Column(DateTime, server_default=func.now())
 
-    # relationships (isteğe bağlı)
     account = relationship("Account", lazy="selectin")
     owner   = relationship("User", lazy="selectin")
 
 
-# --------- NEW: Leads ---------
+# =========================
+# Leads
+# =========================
 class Lead(Base):
     """
-    Basit Lead modeli (Salesforce yaklaşımı):
-      - henüz Account/Contact/Opportunity'ye dönüşmemiş adaylar
-      - Convert sonrası referans id’leri saklanır (soft link)
+    Lead → henüz Account/Contact/Opportunity'ye dönmemiş aday.
+    Convert sonrası referans id’leri (soft link) saklanır.
     """
     __tablename__ = "leads"
 
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
-    owner_id  = Column(Integer, ForeignKey("users.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    owner_id  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
 
-    # Kim bu lead?
-    name   = Column(String, nullable=False)       # kişi adı veya temas adı
+    # Profil
+    name    = Column(String, nullable=False)
     company = Column(String, nullable=True)
-    email  = Column(String, nullable=True)
-    phone  = Column(String, nullable=True)
-    title  = Column(String, nullable=True)
+    email   = Column(String, nullable=True)
+    phone   = Column(String, nullable=True)
+    title   = Column(String, nullable=True)
 
-    # Satış nitelikleri
-    status = Column(String, nullable=True)        # New, Working, Nurturing, Unqualified, Converted
-    source = Column(String, nullable=True)        # Referral, Web, Event...
-    rating = Column(String, nullable=True)        # Hot, Warm, Cold
-    notes  = Column(Text,   nullable=True)
+    # Satış niteliği
+    status  = Column(String, nullable=True)   # New, Working, Nurturing, Unqualified, Converted
+    source  = Column(String, nullable=True)   # Referral, Web, Event...
+    rating  = Column(String, nullable=True)   # Hot, Warm, Cold
+    notes   = Column(Text,   nullable=True)
 
-    # Convert meta
-    converted_account_id     = Column(Integer, ForeignKey("accounts.id"), nullable=True)
-    converted_opportunity_id = Column(Integer, ForeignKey("opportunities.id"), nullable=True)
+    # Convert meta (soft link)
+    converted_account_id     = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
+    converted_opportunity_id = Column(Integer, ForeignKey("opportunities.id", ondelete="SET NULL"), nullable=True)
     converted_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    # ilişkiler
     owner = relationship("User", lazy="selectin")
     converted_account = relationship("Account", lazy="selectin", foreign_keys=[converted_account_id])
     converted_opportunity = relationship("Opportunity", lazy="selectin", foreign_keys=[converted_opportunity_id])
 
 
-# --------- Business Tables: Deals (Pipeline / Stage / Opportunity) ---------
+# =========================
+# Pipeline / Stage / Opportunity
+# =========================
 class Pipeline(Base):
     __tablename__ = "pipelines"
-
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     name = Column(String, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
 
 class Stage(Base):
     __tablename__ = "stages"
-
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
-    pipeline_id = Column(Integer, ForeignKey("pipelines.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    pipeline_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String, nullable=False)
-    # Uygulama tarafında kullanılan isim 'order_index' olduğu için bu kolon adı seçildi
-    order_index = Column(Integer, nullable=False, default=1)
+    order_index = Column(Integer, nullable=False, default=1)  # UI bu adı kullanıyor
     win_probability = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
@@ -188,142 +177,125 @@ class Stage(Base):
 
 class Opportunity(Base):
     __tablename__ = "opportunities"
-
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id"), nullable=False)
-    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
 
     name = Column(String, nullable=False)
     amount = Column(Integer, nullable=True)
     currency = Column(String, nullable=True)
-
-    stage_id = Column(Integer, ForeignKey("stages.id"), nullable=False)
+    stage_id = Column(Integer, ForeignKey("stages.id", ondelete="SET NULL"), nullable=False)
 
     expected_close_date = Column(Date, nullable=True)
     source = Column(String, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(
-        DateTime,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
-    # (isteğe bağlı) ilişkiler:
     account = relationship("Account", lazy="selectin")
     owner   = relationship("User", lazy="selectin")
 
-    # 1:1 ilişki (BusinessCase tarafında UNIQUE kısıtı var)
+    # 1:1 BusinessCase ilişkisi
     business_case = relationship("BusinessCase", uselist=False, back_populates="opportunity", lazy="selectin")
 
 
-# --------- NEW: Business Case / Scenario Modelleme ---------
+# =========================
+# Business Case / Scenario
+# =========================
 class BusinessCase(Base):
     __tablename__ = "business_cases"
-
     id = Column(Integer, primary_key=True, index=True)
-    opportunity_id = Column(Integer, ForeignKey("opportunities.id"), nullable=False)
+    opportunity_id = Column(Integer, ForeignKey("opportunities.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(255), nullable=False)
 
-    # ilişkiler
     opportunity = relationship("Opportunity", back_populates="business_case", lazy="selectin")
-    scenarios = relationship(
-        "Scenario", back_populates="business_case",
-        cascade="all, delete-orphan", lazy="selectin"
+    scenarios = relationship("Scenario", back_populates="business_case", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("opportunity_id", name="uix_business_case_opportunity_1to1"),
     )
 
 
 class Scenario(Base):
     __tablename__ = "scenarios"
-
     id = Column(Integer, primary_key=True, index=True)
-    business_case_id = Column(Integer, ForeignKey("business_cases.id"), nullable=False)
+    business_case_id = Column(Integer, ForeignKey("business_cases.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(255), nullable=False)
     months = Column(Integer, nullable=False, default=36)
     start_date = Column(Date, nullable=False)
 
-    # --- WORKFLOW (Excel sırası: BOQ -> TWC -> CAPEX -> P&L) ---
-    is_boq_ready   = Column(Boolean, nullable=False, default=False)
-    is_twc_ready   = Column(Boolean, nullable=False, default=False)
-    is_capex_ready = Column(Boolean, nullable=False, default=False)
-    workflow_state = Column(String, nullable=False, default="draft")  # 'draft'|'boq'|'twc'|'capex'|'ready'
+    # Excel sırası (Input tabları): BOQ -> TWC -> CAPEX -> (Calc) -> P&L
+    is_boq_ready   = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_twc_ready   = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_capex_ready = Column(Boolean, nullable=False, default=False, server_default="0")
+    workflow_state = Column(String,  nullable=False, default="draft", server_default="draft")
 
-    # ilişkiler
     business_case = relationship("BusinessCase", back_populates="scenarios", lazy="selectin")
-    products = relationship(
-        "ScenarioProduct", back_populates="scenario",
-        cascade="all, delete-orphan", lazy="selectin"
-    )
-    overheads = relationship(
-        "ScenarioOverhead", back_populates="scenario",
-        cascade="all, delete-orphan", lazy="selectin"
-    )
-    # NEW: BOQ items
-    boq_items = relationship(
-        "ScenarioBOQItem", back_populates="scenario",
-        cascade="all, delete-orphan", lazy="selectin"
+    products = relationship("ScenarioProduct", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    overheads = relationship("ScenarioOverhead", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    boq_items = relationship("ScenarioBOQItem", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    capex_items = relationship("ScenarioCapex", backref="scenario", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        Index("ix_scenarios_bc", "business_case_id"),
     )
 
 
+# =========================
+# Scenario: Revenues (Products) & Overheads
+# =========================
 class ScenarioProduct(Base):
     __tablename__ = "scenario_products"
-
     id = Column(Integer, primary_key=True, index=True)
-    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(255), nullable=False)
     price = Column(Numeric(18, 4), nullable=False, default=0)
     unit_cogs = Column(Numeric(18, 4), nullable=False, default=0)
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
 
-    # ilişkiler
     scenario = relationship("Scenario", back_populates="products", lazy="selectin")
-    months = relationship(
-        "ScenarioProductMonth", back_populates="product",
-        cascade="all, delete-orphan", lazy="selectin"
-    )
+    months = relationship("ScenarioProductMonth", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
 
 
 class ScenarioProductMonth(Base):
     __tablename__ = "scenario_product_months"
-
     id = Column(Integer, primary_key=True, index=True)
-    scenario_product_id = Column(Integer, ForeignKey("scenario_products.id"), nullable=False)
+    scenario_product_id = Column(Integer, ForeignKey("scenario_products.id", ondelete="CASCADE"), nullable=False)
     year = Column(Integer, nullable=False)
     month = Column(Integer, nullable=False)  # 1..12
     quantity = Column(Numeric(18, 4), nullable=False, default=0)
 
-    # ilişkiler
     product = relationship("ScenarioProduct", back_populates="months", lazy="selectin")
 
 
 class ScenarioOverhead(Base):
     __tablename__ = "scenario_overheads"
-
     id = Column(Integer, primary_key=True, index=True)
-    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
     name = Column(String(255), nullable=False)
     type = Column(String(20), nullable=False)          # 'fixed' | '%_revenue'
     amount = Column(Numeric(18, 4), nullable=False, default=0)
 
-    # ilişkiler
     scenario = relationship("Scenario", back_populates="overheads", lazy="selectin")
 
 
-# --------- NEW: CAPEX (scenario_capex) ---------
+# =========================
+# Scenario: CAPEX
+# =========================
 class ScenarioCapex(Base):
     __tablename__ = "scenario_capex"
 
     id = Column(Integer, primary_key=True, index=True)
-    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    # Zaman & tutar
+    # Zaman & Tutar
     year = Column(Integer, nullable=False)
     month = Column(Integer, nullable=False)  # 1..12
     amount = Column(Numeric(18, 2), nullable=False, default=0)
     notes = Column(Text, nullable=True)
 
-    # V2 alanları
+    # V2
     asset_name = Column(String, nullable=True)
     category = Column(String, nullable=True)
     service_start_year = Column(Integer, nullable=True)
@@ -333,7 +305,7 @@ class ScenarioCapex(Base):
     salvage_value = Column(Numeric(18, 2), nullable=True, default=0)
     is_active = Column(Boolean, nullable=True, default=True)
 
-    # V3 ek alanlar
+    # V3
     disposal_year = Column(Integer, nullable=True)
     disposal_month = Column(Integer, nullable=True)
     disposal_proceeds = Column(Numeric(18, 2), nullable=True, default=0)
@@ -343,47 +315,47 @@ class ScenarioCapex(Base):
     contingency_pct = Column(Numeric(5, 2), nullable=True, default=0)
     partial_month_policy = Column(String, nullable=True, default="full_month")
 
-    # ilişkiler
-    scenario = relationship("Scenario", backref="capex_items", lazy="selectin")
 
-
-# --------- NEW: BOQ (Bill of Quantities) ---------
+# =========================
+# Scenario: BOQ (Bill of Quantities)
+# =========================
 class ScenarioBOQItem(Base):
     __tablename__ = "scenario_boq_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    section = Column(String(50), nullable=True)          # örn. "AN", "EM"
+    section = Column(String(50), nullable=True)          # Örn: "AN", "EM"
     item_name = Column(String(255), nullable=False)
     unit = Column(String(50), nullable=False)            # ton, m3, adet...
     quantity = Column(Numeric(18, 4), nullable=False, default=0)
     unit_price = Column(Numeric(18, 4), nullable=False, default=0)
-    unit_cogs = Column(Numeric(18, 4), nullable=True)    # opsiyonel
+    unit_cogs = Column(Numeric(18, 4), nullable=True)
 
     frequency = Column(String(20), nullable=False, default="once")  # once|monthly|per_shipment|per_tonne
     start_year = Column(Integer, nullable=True)
     start_month = Column(Integer, nullable=True)         # 1..12
     months = Column(Integer, nullable=True)              # monthly ise kaç ay
 
-    is_active = Column(Boolean, nullable=False, default=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
     notes = Column(Text, nullable=True)
 
-    # NEW: Category (ENUM)
-    category = Column(
-        Enum(
-            "bulk_with_freight",
-            "bulk_ex_freight",
-            "freight",
-            name="boq_category",
-        ),
-        nullable=True,
-    )
+    # Script ile birebir uyumlu: TEXT + CHECK
+    category = Column(String, nullable=True)
 
-    # ilişkiler
     scenario = relationship("Scenario", back_populates="boq_items", lazy="selectin")
 
+    __table_args__ = (
+        # SQLite CHECK: NULL değerler CHECK'e takılmaz; script'teki davranışla aynı
+        CheckConstraint(
+            "category IN ('bulk_with_freight','bulk_ex_freight','freight')",
+            name="ck_boq_category",
+        ),
+        Index("ix_boq_scenario", "scenario_id"),
+    )
 
-# --------- Create Tables (if not exist) ---------
-# Bu satır, uygulama ilk çalıştığında tabloları oluşturur (varsa dokunmaz).
+
+# =========================
+# Create all (idempotent)
+# =========================
 Base.metadata.create_all(bind=engine)

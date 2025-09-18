@@ -29,7 +29,7 @@ import LeadDetailPage from "./pages/LeadDetail";
 // NEW
 import BusinessCasePage from "./pages/BusinessCase";
 // 🔧 FIX: tabs’lı sayfa
-import ScenarioPage from "./pages/scenario/ScenarioPage";
+import ScenarioPage from "./pages/scenario/Scenario";
 
 import { apiGet, ApiError } from "./lib/api";
 import { clearToken, getToken, AUTH_EVENT } from "./lib/auth";

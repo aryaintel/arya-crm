@@ -1,368 +1,268 @@
 # backend/app/api/scenario_capex.py
-from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from typing import List, Optional
+from decimal import Decimal
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import select, func
 
-from .deps import get_db, get_current_user, CurrentUser, require_permissions
+from ..models import Scenario, ScenarioCapex
+from .deps import get_db, get_current_user  # auth token kontrolü (mevcut projedeki bağımlılık)
 
-router = APIRouter(prefix="/business-cases/scenarios", tags=["capex"])
+router = APIRouter(
+    prefix="/scenarios",
+    tags=["capex"],
+)
 
+# =========================
+# Allowed values (Excel paraleli)
+# =========================
+DEPR_ALLOWED = {"straight_line", "declining_balance", "sum_of_years"}
+PARTIAL_MONTH_POLICY = {"full_month", "half_month", "actual_days"}
 
-# ---------- Schemas ----------
+# =========================
+# Schemas
+# =========================
 class CapexIn(BaseModel):
-    # Nakit çıkışının olduğu ay
+    # Zaman & tutar (zorunlu)
     year: int = Field(..., ge=1900, le=3000)
     month: int = Field(..., ge=1, le=12)
-    amount: float
+    amount: Decimal = Field(...)
+
+    # Açıklama
     notes: Optional[str] = None
 
-    # V2: asset & amortisman bilgileri
+    # V2: varlık / amortisman
     asset_name: Optional[str] = None
     category: Optional[str] = None
-    service_start_year: Optional[int] = None
+    service_start_year: Optional[int] = Field(None, ge=1900, le=3000)
     service_start_month: Optional[int] = Field(None, ge=1, le=12)
-    useful_life_months: Optional[int] = Field(None, ge=1, le=1200)
-    depr_method: Optional[str] = "straight_line"
-    salvage_value: Optional[float] = 0
-    is_active: Optional[bool] = True
+    useful_life_months: Optional[int] = Field(None, ge=1, le=600)  # max 50y
+    depr_method: Optional[str] = Field("straight_line")
+    salvage_value: Optional[Decimal] = Field(0, ge=0)
+    is_active: Optional[bool] = Field(True)
 
-    # V3: i.Capital ilaveleri
-    disposal_year: Optional[int] = None
+    # V3: ek alanlar
+    disposal_year: Optional[int] = Field(None, ge=1900, le=3000)
     disposal_month: Optional[int] = Field(None, ge=1, le=12)
-    disposal_proceeds: Optional[float] = 0
-    replace_at_end: Optional[bool] = False
-    per_unit_cost: Optional[float] = None
-    quantity: Optional[int] = None
-    contingency_pct: Optional[float] = 0  # % olarak (örn 10 => %10)
-    partial_month_policy: Optional[str] = "full_month"  # full_month|mid_month
+    disposal_proceeds: Optional[Decimal] = Field(0, ge=0)
+    replace_at_end: Optional[bool] = Field(False)
+    per_unit_cost: Optional[Decimal] = Field(None, ge=0)
+    quantity: Optional[int] = Field(None, ge=0)
+    contingency_pct: Optional[Decimal] = Field(0, ge=0, le=100)
+    partial_month_policy: Optional[str] = Field("full_month")
+
+    @validator("depr_method")
+    def _depr_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v and v not in DEPR_ALLOWED:
+            raise ValueError(f"depr_method must be one of {sorted(DEPR_ALLOWED)}")
+        return v
+
+    @validator("partial_month_policy")
+    def _pmp_ok(cls, v: Optional[str]) -> Optional[str]:
+        if v and v not in PARTIAL_MONTH_POLICY:
+            raise ValueError(f"partial_month_policy must be one of {sorted(PARTIAL_MONTH_POLICY)}")
+        return v
 
 
-class CapexPatch(BaseModel):
-    year: Optional[int] = Field(None, ge=1900, le=3000)
-    month: Optional[int] = Field(None, ge=1, le=12)
-    amount: Optional[float] = None
-    notes: Optional[str] = None
-
-    asset_name: Optional[str] = None
-    category: Optional[str] = None
-    service_start_year: Optional[int] = None
-    service_start_month: Optional[int] = Field(None, ge=1, le=12)
-    useful_life_months: Optional[int] = Field(None, ge=1, le=1200)
-    depr_method: Optional[str] = None
-    salvage_value: Optional[float] = None
-    is_active: Optional[bool] = None
-
-    # V3 patch alanları
-    disposal_year: Optional[int] = None
-    disposal_month: Optional[int] = Field(None, ge=1, le=12)
-    disposal_proceeds: Optional[float] = None
-    replace_at_end: Optional[bool] = None
-    per_unit_cost: Optional[float] = None
-    quantity: Optional[int] = None
-    contingency_pct: Optional[float] = None
-    partial_month_policy: Optional[str] = None
-
-
-class CapexOut(CapexIn):
+class CapexOut(BaseModel):
     id: int
     scenario_id: int
+    year: int
+    month: int
+    amount: Decimal
+    notes: Optional[str]
+
+    asset_name: Optional[str]
+    category: Optional[str]
+    service_start_year: Optional[int]
+    service_start_month: Optional[int]
+    useful_life_months: Optional[int]
+    depr_method: Optional[str]
+    salvage_value: Optional[Decimal]
+    is_active: Optional[bool]
+
+    disposal_year: Optional[int]
+    disposal_month: Optional[int]
+    disposal_proceeds: Optional[Decimal]
+    replace_at_end: Optional[bool]
+    per_unit_cost: Optional[Decimal]
+    quantity: Optional[int]
+    contingency_pct: Optional[Decimal]
+    partial_month_policy: Optional[str]
 
     class Config:
         orm_mode = True
 
 
-# ---------- Helpers ----------
-def _to_bool(v: Any) -> Optional[bool]:
-    if v is None:
-        return None
-    if isinstance(v, bool):
-        return v
-    try:
-        return bool(int(v))
-    except Exception:
-        return bool(v)
+class CapexBulkIn(BaseModel):
+    items: List[CapexIn]
 
 
-def _to_float(v: Any) -> Optional[float]:
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except Exception:
-        return None
-
-
-def _row_to_dict(row: Dict[str, Any]) -> Dict[str, Any]:
-    d = dict(row)
-
-    # sayısal cast
-    for k in (
-        "amount",
-        "salvage_value",
-        "disposal_proceeds",
-        "per_unit_cost",
-        "contingency_pct",
-    ):
-        if k in d:
-            d[k] = _to_float(d[k])
-
-    # quantity int'e yakınsın
-    if "quantity" in d and d["quantity"] is not None:
-        try:
-            d["quantity"] = int(d["quantity"])
-        except Exception:
-            pass
-
-    # bool cast
-    for k in ("is_active", "replace_at_end"):
-        if k in d:
-            d[k] = _to_bool(d[k])
-
-    return d
-
-
-def _select_cols() -> str:
-    # tüm alanları seç
-    return (
-        "c.id, c.scenario_id, c.year, c.month, c.amount, c.notes, "
-        "c.asset_name, c.category, c.service_start_year, c.service_start_month, "
-        "c.useful_life_months, c.depr_method, c.salvage_value, c.is_active, "
-        "c.disposal_year, c.disposal_month, c.disposal_proceeds, "
-        "c.replace_at_end, c.per_unit_cost, c.quantity, c.contingency_pct, "
-        "c.partial_month_policy"
-    )
-
-
-def _ensure_scenario_in_tenant(db: Session, tenant_id: int, scenario_id: int) -> None:
-    r = db.execute(
-        text(
-            """
-            SELECT s.id
-            FROM scenarios s
-            JOIN business_cases bc ON bc.id = s.business_case_id
-            JOIN opportunities o ON o.id = bc.opportunity_id
-            WHERE s.id = :sid AND o.tenant_id = :tid
-            """
-        ),
-        {"sid": scenario_id, "tid": tenant_id},
-    ).first()
-    if not r:
+# =========================
+# Helpers
+# =========================
+def _ensure_scenario(db: Session, scenario_id: int) -> Scenario:
+    sc = db.get(Scenario, scenario_id)
+    if not sc:
         raise HTTPException(status_code=404, detail="Scenario not found")
+    return sc
 
 
-def _get_by_id_for_tenant(db: Session, tenant_id: int, capex_id: int) -> Dict[str, Any]:
-    r = db.execute(
-        text(
-            f"""
-            SELECT {_select_cols()}
-            FROM scenario_capex c
-            JOIN scenarios s ON s.id = c.scenario_id
-            JOIN business_cases bc ON bc.id = s.business_case_id
-            JOIN opportunities o ON o.id = bc.opportunity_id
-            WHERE c.id = :id AND o.tenant_id = :tid
-            """
-        ),
-        {"id": capex_id, "tid": tenant_id},
-    ).mappings().first()
-    if not r:
-        raise HTTPException(status_code=404, detail="Capex not found")
-    return _row_to_dict(r)
-
-
-# ---------- Endpoints ----------
+# =========================
+# Routes
+# =========================
 @router.get(
     "/{scenario_id}/capex",
     response_model=List[CapexOut],
-    dependencies=[Depends(require_permissions(["cases:read"]))],
+    summary="List CAPEX items in a scenario",
 )
 def list_capex(
-    scenario_id: int,
+    scenario_id: int = Path(..., ge=1),
+    only_active: bool = Query(False),
+    year: Optional[int] = Query(None, ge=1900, le=3000),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    _user=Depends(get_current_user),
 ):
-    _ensure_scenario_in_tenant(db, current.tenant_id, scenario_id)
-    rows = db.execute(
-        text(
-            f"""
-            SELECT {_select_cols()}
-            FROM scenario_capex c
-            WHERE c.scenario_id = :sid
-            ORDER BY c.year, c.month, c.id
-            """
-        ),
-        {"sid": scenario_id},
-    ).mappings().all()
-    return [_row_to_dict(r) for r in rows]
+    _ensure_scenario(db, scenario_id)
+    stmt = select(ScenarioCapex).where(ScenarioCapex.scenario_id == scenario_id)
+    if only_active:
+        stmt = stmt.where(ScenarioCapex.is_active.is_(True))
+    if year is not None:
+        stmt = stmt.where(ScenarioCapex.year == year)
+    stmt = stmt.order_by(ScenarioCapex.year.asc(), ScenarioCapex.month.asc(), ScenarioCapex.id.asc())
+    rows = db.execute(stmt).scalars().all()
+    return rows
 
 
 @router.post(
     "/{scenario_id}/capex",
     response_model=CapexOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permissions(["cases:write"]))],
+    summary="Create a CAPEX item",
 )
 def create_capex(
-    scenario_id: int,
-    body: CapexIn,
+    payload: CapexIn,
+    scenario_id: int = Path(..., ge=1),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    _user=Depends(get_current_user),
 ):
-    _ensure_scenario_in_tenant(db, current.tenant_id, scenario_id)
-
-    sql = text(
-        """
-        INSERT INTO scenario_capex (
-          scenario_id, year, month, amount, notes,
-          asset_name, category, service_start_year, service_start_month,
-          useful_life_months, depr_method, salvage_value, is_active,
-          disposal_year, disposal_month, disposal_proceeds,
-          replace_at_end, per_unit_cost, quantity, contingency_pct,
-          partial_month_policy
-        ) VALUES (
-          :sid, :y, :m, :a, :n,
-          :asset_name, :category, :ssy, :ssm,
-          :life, :method, :salvage, :active,
-          :dpy, :dpm, :dpp,
-          :rep, :puc, :qty, :cntg,
-          :pmp
-        )
-        """
+    _ensure_scenario(db, scenario_id)
+    row = ScenarioCapex(
+        scenario_id=scenario_id,
+        year=payload.year,
+        month=payload.month,
+        amount=payload.amount,
+        notes=payload.notes,
+        asset_name=payload.asset_name,
+        category=payload.category,
+        service_start_year=payload.service_start_year,
+        service_start_month=payload.service_start_month,
+        useful_life_months=payload.useful_life_months,
+        depr_method=payload.depr_method,
+        salvage_value=payload.salvage_value,
+        is_active=payload.is_active,
+        disposal_year=payload.disposal_year,
+        disposal_month=payload.disposal_month,
+        disposal_proceeds=payload.disposal_proceeds,
+        replace_at_end=payload.replace_at_end,
+        per_unit_cost=payload.per_unit_cost,
+        quantity=payload.quantity,
+        contingency_pct=payload.contingency_pct,
+        partial_month_policy=payload.partial_month_policy,
     )
-    params = {
-        "sid": scenario_id,
-        "y": body.year,
-        "m": body.month,
-        "a": body.amount,
-        "n": body.notes,
-        "asset_name": body.asset_name,
-        "category": body.category,
-        "ssy": body.service_start_year,
-        "ssm": body.service_start_month,
-        "life": body.useful_life_months,
-        "method": body.depr_method or "straight_line",
-        "salvage": body.salvage_value if body.salvage_value is not None else 0,
-        "active": 1 if (body.is_active is None or body.is_active) else 0,
-        "dpy": body.disposal_year,
-        "dpm": body.disposal_month,
-        "dpp": body.disposal_proceeds if body.disposal_proceeds is not None else 0,
-        "rep": 1 if body.replace_at_end else 0,
-        "puc": body.per_unit_cost,
-        "qty": body.quantity,
-        "cntg": body.contingency_pct if body.contingency_pct is not None else 0,
-        "pmp": body.partial_month_policy or "full_month",
-    }
-    db.execute(sql, params)
-    new_id = db.execute(text("SELECT last_insert_rowid()")).scalar_one()
+    db.add(row)
     db.commit()
-    return _get_by_id_for_tenant(db, current.tenant_id, int(new_id))
+    db.refresh(row)
+    return row
 
 
-@router.patch(
-    "/capex/{capex_id}",
+@router.put(
+    "/{scenario_id}/capex/{item_id}",
     response_model=CapexOut,
-    dependencies=[Depends(require_permissions(["cases:write"]))],
+    summary="Update a CAPEX item",
 )
 def update_capex(
-    capex_id: int,
-    body: CapexPatch,
+    payload: CapexIn,
+    scenario_id: int = Path(..., ge=1),
+    item_id: int = Path(..., ge=1),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    _user=Depends(get_current_user),
 ):
-    # kiracı doğrulaması + mevcut satır
-    _ = _get_by_id_for_tenant(db, current.tenant_id, capex_id)
-
-    sets = []
-    params: Dict[str, Any] = {"id": capex_id}
-
-    if body.year is not None:
-        sets.append("year = :y")
-        params["y"] = body.year
-    if body.month is not None:
-        sets.append("month = :m")
-        params["m"] = body.month
-    if body.amount is not None:
-        sets.append("amount = :a")
-        params["a"] = body.amount
-    if body.notes is not None:
-        sets.append("notes = :n")
-        params["n"] = body.notes
-
-    if body.asset_name is not None:
-        sets.append("asset_name = :asset_name")
-        params["asset_name"] = body.asset_name
-    if body.category is not None:
-        sets.append("category = :category")
-        params["category"] = body.category
-    if body.service_start_year is not None:
-        sets.append("service_start_year = :ssy")
-        params["ssy"] = body.service_start_year
-    if body.service_start_month is not None:
-        sets.append("service_start_month = :ssm")
-        params["ssm"] = body.service_start_month
-    if body.useful_life_months is not None:
-        sets.append("useful_life_months = :life")
-        params["life"] = body.useful_life_months
-    if body.depr_method is not None:
-        sets.append("depr_method = :method")
-        params["method"] = body.depr_method
-    if body.salvage_value is not None:
-        sets.append("salvage_value = :salvage")
-        params["salvage"] = body.salvage_value
-    if body.is_active is not None:
-        sets.append("is_active = :active")
-        params["active"] = 1 if body.is_active else 0
-
-    # V3 patch'leri
-    if body.disposal_year is not None:
-        sets.append("disposal_year = :dpy")
-        params["dpy"] = body.disposal_year
-    if body.disposal_month is not None:
-        sets.append("disposal_month = :dpm")
-        params["dpm"] = body.disposal_month
-    if body.disposal_proceeds is not None:
-        sets.append("disposal_proceeds = :dpp")
-        params["dpp"] = body.disposal_proceeds
-    if body.replace_at_end is not None:
-        sets.append("replace_at_end = :rep")
-        params["rep"] = 1 if body.replace_at_end else 0
-    if body.per_unit_cost is not None:
-        sets.append("per_unit_cost = :puc")
-        params["puc"] = body.per_unit_cost
-    if body.quantity is not None:
-        sets.append("quantity = :qty")
-        params["qty"] = body.quantity
-    if body.contingency_pct is not None:
-        sets.append("contingency_pct = :cntg")
-        params["cntg"] = body.contingency_pct
-    if body.partial_month_policy is not None:
-        sets.append("partial_month_policy = :pmp")
-        params["pmp"] = body.partial_month_policy
-
-    if sets:
-        sql = "UPDATE scenario_capex SET " + ", ".join(sets) + " WHERE id = :id"
-        db.execute(text(sql), params)
-        db.commit()
-
-    return _get_by_id_for_tenant(db, current.tenant_id, capex_id)
+    _ensure_scenario(db, scenario_id)
+    row = db.get(ScenarioCapex, item_id)
+    if not row or row.scenario_id != scenario_id:
+        raise HTTPException(status_code=404, detail="CAPEX item not found")
+    for k, v in payload.dict().items():
+        setattr(row, k, v)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.delete(
-    "/capex/{capex_id}",
+    "/{scenario_id}/capex/{item_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permissions(["cases:write"]))],
+    summary="Delete a CAPEX item",
 )
 def delete_capex(
-    capex_id: int,
+    scenario_id: int = Path(..., ge=1),
+    item_id: int = Path(..., ge=1),
     db: Session = Depends(get_db),
-    current: CurrentUser = Depends(get_current_user),
+    _user=Depends(get_current_user),
 ):
-    # kiracı doğrulaması
-    _ = _get_by_id_for_tenant(db, current.tenant_id, capex_id)
-
-    res = db.execute(text("DELETE FROM scenario_capex WHERE id = :id"), {"id": capex_id})
-    if res.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Capex not found")
+    _ensure_scenario(db, scenario_id)
+    row = db.get(ScenarioCapex, item_id)
+    if not row or row.scenario_id != scenario_id:
+        raise HTTPException(status_code=404, detail="CAPEX item not found")
+    db.delete(row)
     db.commit()
     return None
+
+
+@router.post(
+    "/{scenario_id}/capex/bulk",
+    response_model=List[CapexOut],
+    summary="Bulk insert CAPEX items (append only)",
+)
+def bulk_insert_capex(
+    payload: CapexBulkIn,
+    scenario_id: int = Path(..., ge=1),
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    _ensure_scenario(db, scenario_id)
+
+    new_rows: List[ScenarioCapex] = []
+    for item in payload.items:
+        new_rows.append(
+            ScenarioCapex(
+                scenario_id=scenario_id,
+                year=item.year,
+                month=item.month,
+                amount=item.amount,
+                notes=item.notes,
+                asset_name=item.asset_name,
+                category=item.category,
+                service_start_year=item.service_start_year,
+                service_start_month=item.service_start_month,
+                useful_life_months=item.useful_life_months,
+                depr_method=item.depr_method,
+                salvage_value=item.salvage_value,
+                is_active=item.is_active,
+                disposal_year=item.disposal_year,
+                disposal_month=item.disposal_month,
+                disposal_proceeds=item.disposal_proceeds,
+                replace_at_end=item.replace_at_end,
+                per_unit_cost=item.per_unit_cost,
+                quantity=item.quantity,
+                contingency_pct=item.contingency_pct,
+                partial_month_policy=item.partial_month_policy,
+            )
+        )
+    db.add_all(new_rows)
+    db.commit()
+    for r in new_rows:
+        db.refresh(r)
+    return new_rows
