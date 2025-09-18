@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..api.deps import get_db, get_current_user, CurrentUser
+from ..api.deps import get_db, get_current_user, CurrentUser, require_permissions
 from ..models import Scenario, ScenarioBOQItem
 
 router = APIRouter(prefix="/business-cases/scenarios", tags=["boq"])
@@ -69,7 +69,10 @@ def ensure_scenario_exists(db: Session, scenario_id: int) -> Scenario:
     return sc
 
 # ---------- endpoints ----------
-@router.get("/{scenario_id}/boq-items")
+@router.get(
+    "/{scenario_id}/boq-items",
+    dependencies=[Depends(require_permissions(["cases:read"]))],
+)
 def list_boq_items(
     scenario_id: int,
     db: Session = Depends(get_db),
@@ -84,7 +87,10 @@ def list_boq_items(
     )
     return [serialize(it) for it in items]
 
-@router.post("/{scenario_id}/boq-items")
+@router.post(
+    "/{scenario_id}/boq-items",
+    dependencies=[Depends(require_permissions(["cases:write"]))],
+)
 def create_boq_item(
     scenario_id: int,
     body: BOQCreate,
@@ -94,7 +100,7 @@ def create_boq_item(
     ensure_scenario_exists(db, scenario_id)
     it = ScenarioBOQItem(
         scenario_id=scenario_id,
-        section=body.section,
+        section=(body.section or None),
         item_name=body.item_name.strip(),
         unit=body.unit.strip(),
         quantity=body.quantity or 0,
@@ -113,7 +119,10 @@ def create_boq_item(
     db.refresh(it)
     return serialize(it)
 
-@router.patch("/boq-items/{item_id}")
+@router.patch(
+    "/boq-items/{item_id}",
+    dependencies=[Depends(require_permissions(["cases:write"]))],
+)
 def update_boq_item(
     item_id: int,
     body: BOQUpdate,
@@ -132,7 +141,10 @@ def update_boq_item(
     db.refresh(it)
     return serialize(it)
 
-@router.delete("/boq-items/{item_id}")
+@router.delete(
+    "/boq-items/{item_id}",
+    dependencies=[Depends(require_permissions(["cases:write"]))],
+)
 def delete_boq_item(
     item_id: int,
     db: Session = Depends(get_db),

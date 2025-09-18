@@ -1,3 +1,4 @@
+// src/pages/scenario/tabs/PLTab.tsx
 import type {
   ScenarioDetail,
   PLResponse,
@@ -205,7 +206,9 @@ export default function PLTab({
             <KV label="Overhead Fixed Total" value={fmt(pl.totals.overhead_fixed_total)} />
             <KV label="Overhead Variable Total" value={fmt(pl.totals.overhead_var_total)} />
             <KV label="Overhead Total" value={fmt(pl.totals.overhead_total)} />
+            <KV label="Depreciation Total" value={fmt(pl.totals.depreciation_total)} />
             <KV label="EBIT" value={fmt(pl.totals.ebit)} />
+            <KV label="Net Income" value={fmt(pl.totals.net_income)} />
           </Card>
 
           <Card>
@@ -232,7 +235,9 @@ export default function PLTab({
                     { key: "cogs", label: "COGS" },
                     { key: "gross_margin", label: "Gross Margin" },
                     { key: "overhead_total", label: "Overhead (Total)" },
+                    { key: "depreciation", label: "Depreciation" },
                     { key: "ebit", label: "EBIT" },
+                    { key: "net_income", label: "Net Income" },
                   ].map((row) => (
                     <tr key={row.key} className="border-b last:border-0">
                       <td className="sticky left-0 bg-white py-1 px-2 font-medium">

@@ -50,7 +50,7 @@ export type ScenarioBOQItem = {
   unit: string;
   quantity: number;
   unit_price: number;
-  unit_cogs?: number | null; // <-- burada null'a izin veriyoruz
+  unit_cogs?: number | null; // nullable
   frequency: BOQFrequency;
   start_year?: number;
   start_month?: number;
@@ -82,7 +82,7 @@ export type ScenarioDetail = {
   products: ScenarioProduct[];
   overheads: ScenarioOverhead[];
   boq_items?: ScenarioBOQItem[];
-  capex?: CapexEntry[];  // NEW: CAPEX satırları
+  capex?: CapexEntry[];  // CAPEX satırları
 };
 
 export type PLMonth = {
@@ -95,6 +95,7 @@ export type PLMonth = {
   overhead_var_pct: number;
   overhead_var_amount: number;
   overhead_total: number;
+  depreciation: number;      // NEW
   ebit: number;
   net_income: number;
 };
@@ -115,6 +116,7 @@ export type PLResponse = {
     overhead_fixed_total: number;
     overhead_var_total: number;
     overhead_total: number;
+    depreciation_total: number; // NEW
     ebit: number;
     net_income: number;
   };

@@ -11,7 +11,7 @@ from sqlalchemy import (
     func,
     Numeric,
     Boolean,
-    Enum,  # NEW: SQLAlchemy Enum
+    Enum,  # BOQ category enum
 )
 from sqlalchemy.orm import declarative_base, relationship
 from ..core.config import engine
@@ -243,6 +243,12 @@ class Scenario(Base):
     months = Column(Integer, nullable=False, default=36)
     start_date = Column(Date, nullable=False)
 
+    # --- WORKFLOW (Excel sırası: BOQ -> TWC -> CAPEX -> P&L) ---
+    is_boq_ready   = Column(Boolean, nullable=False, default=False)
+    is_twc_ready   = Column(Boolean, nullable=False, default=False)
+    is_capex_ready = Column(Boolean, nullable=False, default=False)
+    workflow_state = Column(String, nullable=False, default="draft")  # 'draft'|'boq'|'twc'|'capex'|'ready'
+
     # ilişkiler
     business_case = relationship("BusinessCase", back_populates="scenarios", lazy="selectin")
     products = relationship(
@@ -302,6 +308,43 @@ class ScenarioOverhead(Base):
 
     # ilişkiler
     scenario = relationship("Scenario", back_populates="overheads", lazy="selectin")
+
+
+# --------- NEW: CAPEX (scenario_capex) ---------
+class ScenarioCapex(Base):
+    __tablename__ = "scenario_capex"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id"), nullable=False)
+
+    # Zaman & tutar
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)  # 1..12
+    amount = Column(Numeric(18, 2), nullable=False, default=0)
+    notes = Column(Text, nullable=True)
+
+    # V2 alanları
+    asset_name = Column(String, nullable=True)
+    category = Column(String, nullable=True)
+    service_start_year = Column(Integer, nullable=True)
+    service_start_month = Column(Integer, nullable=True)
+    useful_life_months = Column(Integer, nullable=True)
+    depr_method = Column(String, nullable=True, default="straight_line")
+    salvage_value = Column(Numeric(18, 2), nullable=True, default=0)
+    is_active = Column(Boolean, nullable=True, default=True)
+
+    # V3 ek alanlar
+    disposal_year = Column(Integer, nullable=True)
+    disposal_month = Column(Integer, nullable=True)
+    disposal_proceeds = Column(Numeric(18, 2), nullable=True, default=0)
+    replace_at_end = Column(Boolean, nullable=True, default=False)
+    per_unit_cost = Column(Numeric(18, 2), nullable=True)
+    quantity = Column(Integer, nullable=True)
+    contingency_pct = Column(Numeric(5, 2), nullable=True, default=0)
+    partial_month_policy = Column(String, nullable=True, default="full_month")
+
+    # ilişkiler
+    scenario = relationship("Scenario", backref="capex_items", lazy="selectin")
 
 
 # --------- NEW: BOQ (Bill of Quantities) ---------

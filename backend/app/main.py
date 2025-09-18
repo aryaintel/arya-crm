@@ -15,7 +15,8 @@ from .api import (
     leads,
     business_cases,      # Business Case & Scenario API
     scenario_overheads,  # Overheads router
-    scenario_boq,        # BOQ router ← NEW
+    scenario_boq,        # BOQ router
+    scenario_capex,      # NEW: CAPEX router
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -69,4 +70,5 @@ app.include_router(secure.router)
 app.include_router(leads.router)
 app.include_router(business_cases.router)
 app.include_router(scenario_overheads.router)
-app.include_router(scenario_boq.router)  # ← NEW
+app.include_router(scenario_boq.router)
+app.include_router(scenario_capex.router)  # NEW
