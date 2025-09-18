@@ -1,407 +1,214 @@
-// src/pages/scenario/tabs/PLTab.tsx
-import type {
-  ScenarioDetail,
-  PLResponse,
-  ScenarioOverhead,
-  ScenarioProduct,
-} from "../../../types/scenario";
+import React, { useEffect, useMemo, useState } from "react";
+import { apiGet } from "../../../lib/api";
 
-import ProductsTable from "../components/ProductsTable";
-import OverheadsTable from "../components/OverheadsTable";
-import { Card, KV } from "../../../components/ui";
-import { fmt, fmtMonthYY, getNumberClass } from "../../../utils/format";
-import { apiPatch, apiPost, apiDelete, ApiError } from "../../../lib/api";
-import { useState } from "react";
-
+/** Props */
 type Props = {
-  data: ScenarioDetail;
-  pl: PLResponse | null;
-  onCompute: () => void | Promise<void>;
-  refresh: () => void | Promise<void>;
-  /** Üst bileşenden göndermen şart değil; gönderilmezse no-op kullanılır */
-  openMonthsEditor?: (p: ScenarioProduct) => void;
+  scenarioId: number;
 };
 
-export default function PLTab({
-  data,
-  pl,
-  onCompute,
-  refresh,
-  openMonthsEditor,
-}: Props) {
-  // ---------- Product modal ----------
-  const [openProd, setOpenProd] = useState(false);
-  const [editingProd, setEditingProd] = useState<ScenarioProduct | null>(null);
-  const [prodForm, setProdForm] = useState({
-    name: "",
-    price: "0",
-    unit_cogs: "0",
-    is_active: true as boolean,
-  });
-  const isProdValid = prodForm.name.trim().length > 0;
+/** BOQ Item (özet) */
+type BOQItem = {
+  id?: number;
+  is_active: boolean | null | undefined;
 
-  const onNewProd = () => {
-    setEditingProd(null);
-    setProdForm({ name: "", price: "0", unit_cogs: "0", is_active: true });
-    setOpenProd(true);
-  };
-  const onEditProd = (p: ScenarioProduct) => {
-    setEditingProd(p);
-    setProdForm({
-      name: p.name,
-      price: String(p.price ?? 0),
-      unit_cogs: String(p.unit_cogs ?? 0),
-      is_active: !!p.is_active,
-    });
-    setOpenProd(true);
-  };
-  const onSaveProd = async () => {
-    if (!isProdValid) return;
-    const base = {
-      name: prodForm.name.trim(),
-      price: Number(prodForm.price || 0),
-      unit_cogs: Number(prodForm.unit_cogs || 0),
-      is_active: !!prodForm.is_active,
-    };
+  item_name: string;
+  unit: string;
+
+  quantity: number | null | undefined;
+  unit_price: number | null | undefined;
+  unit_cogs?: number | null | undefined;
+
+  frequency: "once" | "monthly" | "per_shipment" | "per_tonne";
+  months?: number | null | undefined;
+
+  start_year?: number | null | undefined;
+  start_month?: number | null | undefined;
+};
+
+type MonthAgg = { revenue: number; cogs: number; gm: number };
+
+function num(v: any): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+function ymKey(y: number, m: number) {
+  return `${y}-${pad2(m)}`;
+}
+function addMonths(y: number, m: number, k: number) {
+  const d0 = new Date(y, m - 1, 1);
+  const d1 = new Date(d0.getFullYear(), d0.getMonth() + k, 1);
+  return { year: d1.getFullYear(), month: d1.getMonth() + 1 };
+}
+function getOrInit(map: Map<string, MonthAgg>, key: string): MonthAgg {
+  const cur = map.get(key);
+  if (cur) return cur;
+  const blank: MonthAgg = { revenue: 0, cogs: 0, gm: 0 };
+  map.set(key, blank);
+  return blank;
+}
+
+/** P&L (BOQ’tan türeyen aylık Revenue/COGS/GM) */
+export default function PLTab({ scenarioId }: Props) {
+  const [boq, setBoq] = useState<BOQItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setErr(null);
     try {
-      if (editingProd)
-        await apiPatch(`/business-cases/scenarios/products/${editingProd.id}`, base);
-      else
-        await apiPost(`/business-cases/scenarios/${data.id}/products`, base);
-
-      setOpenProd(false);
-      await refresh();
+      const data = await apiGet<BOQItem[]>(`/scenarios/${scenarioId}/boq`);
+      setBoq(data);
     } catch (e: any) {
-      alert(
-        (e instanceof ApiError && e.message) ||
-          e?.response?.data?.detail ||
-          e?.message ||
-          "Save failed",
-      );
+      setErr(e?.response?.data?.detail || e?.message || "Failed to load BOQ.");
+    } finally {
+      setLoading(false);
     }
-  };
-  const onDeleteProd = async (p: ScenarioProduct) => {
-    if (!confirm(`Delete product "${p.name}"?`)) return;
-    try {
-      await apiDelete(`/business-cases/scenarios/products/${p.id}`);
-      await refresh();
-    } catch (e: any) {
-      alert(
-        (e instanceof ApiError && e.message) ||
-          e?.response?.data?.detail ||
-          e?.message ||
-          "Delete failed",
-      );
+  }
+
+  useEffect(() => {
+    if (scenarioId) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioId]);
+
+  // BOQ -> Aylık schedule (36 ay)
+  const schedule = useMemo(() => {
+    const agg = new Map<string, MonthAgg>();
+    const HORIZON = 36;
+
+    const active = boq.filter(
+      (r): r is BOQItem & { is_active: true; start_year: number; start_month: number } =>
+        !!r.is_active &&
+        typeof r.start_year === "number" &&
+        typeof r.start_month === "number"
+    );
+
+    for (const r of active) {
+      const qty = num(r.quantity);
+      const price = num(r.unit_price);
+      const uc = num(r.unit_cogs ?? 0);
+      const lineRev = qty * price;
+      const lineCogs = qty * uc;
+
+      const startY = r.start_year;
+      const startM = r.start_month;
+
+      if (r.frequency === "monthly") {
+        const len = Math.max(1, num(r.months ?? 1));
+        for (let k = 0; k < Math.min(len, HORIZON); k++) {
+          const { year, month } = addMonths(startY, startM, k);
+          const key = ymKey(year, month);
+          const cur = getOrInit(agg, key);
+          cur.revenue += lineRev;
+          cur.cogs += lineCogs;
+          cur.gm += lineRev - lineCogs;
+        }
+      } else {
+        // once / per_shipment / per_tonne -> şimdilik tek seferlik
+        const key = ymKey(startY, startM);
+        const cur = getOrInit(agg, key);
+        cur.revenue += lineRev;
+        cur.cogs += lineCogs;
+        cur.gm += lineRev - lineCogs;
+      }
     }
-  };
 
-  // ---------- Overhead modal ----------
-  const [openOvh, setOpenOvh] = useState(false);
-  const [editingOvh, setEditingOvh] = useState<ScenarioOverhead | null>(null);
-  const [ovhForm, setOvhForm] = useState<{
-    name: string;
-    type: "fixed" | "%_revenue";
-    amount: string;
-  }>({ name: "", type: "fixed", amount: "0" });
+    const rows = [...agg.entries()]
+      .map(([key, v]) => ({
+        key,
+        y: Number(key.slice(0, 4)),
+        m: Number(key.slice(5, 7)),
+        ...v,
+      }))
+      .sort((a, b) => a.y - b.y || a.m - b.m);
 
-  const isOvhValid = (() => {
-    const nameOk = ovhForm.name.trim().length > 0;
-    const val = Number(ovhForm.amount);
-    if (!Number.isFinite(val)) return false;
-    if (ovhForm.type === "%_revenue") return nameOk && val >= 0 && val <= 100;
-    return nameOk && val >= 0;
-  })();
+    const totals = rows.reduce(
+      (s, r) => {
+        s.revenue += r.revenue;
+        s.cogs += r.cogs;
+        s.gm += r.gm;
+        return s;
+      },
+      { revenue: 0, cogs: 0, gm: 0 }
+    );
 
-  const onNewOvh = () => {
-    setEditingOvh(null);
-    setOvhForm({ name: "", type: "fixed", amount: "0" });
-    setOpenOvh(true);
-  };
-  const onEditOvh = (o: ScenarioOverhead) => {
-    setEditingOvh(o);
-    setOvhForm({
-      name: o.name,
-      type: o.type,
-      amount: String(o.type === "%_revenue" ? (o.amount ?? 0) * 100 : (o.amount ?? 0)),
-    });
-    setOpenOvh(true);
-  };
-  const onSaveOvh = async () => {
-    if (!isOvhValid) return;
-    const raw = Number(ovhForm.amount || 0);
-    const amountToSend = ovhForm.type === "%_revenue" ? raw / 100 : raw;
-    const base = { name: ovhForm.name.trim(), type: ovhForm.type, amount: amountToSend };
-    try {
-      if (editingOvh)
-        await apiPatch(`/business-cases/scenarios/overheads/${editingOvh.id}`, base);
-      else
-        await apiPost(`/business-cases/scenarios/${data.id}/overheads`, base);
-
-      setOpenOvh(false);
-      await refresh();
-    } catch (e: any) {
-      alert(
-        (e instanceof ApiError && e.message) ||
-          e?.response?.data?.detail ||
-          e?.message ||
-          "Save failed",
-      );
-    }
-  };
-  const onDeleteOvh = async (o: ScenarioOverhead) => {
-    if (!confirm(`Delete overhead "${o.name}"?`)) return;
-    try {
-      await apiDelete(`/business-cases/scenarios/overheads/${o.id}`);
-      await refresh();
-    } catch (e: any) {
-      alert(
-        (e instanceof ApiError && e.message) ||
-          e?.response?.data?.detail ||
-          e?.message ||
-          "Delete failed",
-      );
-    }
-  };
+    return { rows, totals };
+  }, [boq]);
 
   return (
-    <>
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="font-medium">Inputs</h3>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-semibold text-lg">P&amp;L (BOQ bazlı aylık özet)</h3>
         <button
-          onClick={onCompute}
-          className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+          onClick={load}
+          className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200"
+          disabled={loading}
         >
-          Compute P&L
+          Refresh
         </button>
       </div>
 
-      <ProductsTable
-        data={data}
-        onNewProd={onNewProd}
-        openMonthsEditor={openMonthsEditor ?? (() => {})}
-        onEditProd={onEditProd}
-        onDeleteProd={onDeleteProd}
-      />
+      {err && (
+        <div className="text-sm text-red-600 bg-red-50 border border-red-200 p-2 rounded">
+          {err}
+        </div>
+      )}
 
-      <OverheadsTable
-        data={data}
-        onNewOvh={onNewOvh}
-        onEditOvh={onEditOvh}
-        onDeleteOvh={onDeleteOvh}
-      />
-
-      {!pl ? (
-        <Card>
-          <div className="text-sm text-gray-500">
-            Önce <b>Compute P&L</b> ile hesapla.
-          </div>
-        </Card>
+      {loading ? (
+        <div className="text-sm text-gray-500">Loading…</div>
       ) : (
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card>
-            <div className="text-sm font-medium mb-2">Totals</div>
-            <KV label="Revenue" value={fmt(pl.totals.revenue)} />
-            <KV label="COGS" value={fmt(pl.totals.cogs)} />
-            <KV label="Gross Margin" value={fmt(pl.totals.gross_margin)} />
-            <KV label="Overhead Fixed Total" value={fmt(pl.totals.overhead_fixed_total)} />
-            <KV label="Overhead Variable Total" value={fmt(pl.totals.overhead_var_total)} />
-            <KV label="Overhead Total" value={fmt(pl.totals.overhead_total)} />
-            <KV label="Depreciation Total" value={fmt(pl.totals.depreciation_total)} />
-            <KV label="EBIT" value={fmt(pl.totals.ebit)} />
-            <KV label="Net Income" value={fmt(pl.totals.net_income)} />
-          </Card>
-
-          <Card>
-            <div className="text-sm font-medium mb-2">P&amp;L by Month</div>
-            <div className="overflow-x-auto relative">
-              <table className="min-w-max text-xs">
-                <thead>
-                  <tr className="border-b">
-                    <th className="sticky left-0 bg-white py-1 px-2 text-left">Line</th>
-                    {pl.months.map((m, i) => (
-                      <th
-                        key={i}
-                        className="py-1 px-2 text-right whitespace-nowrap"
-                        title={`${m.year}-${String(m.month).padStart(2, "0")}`}
-                      >
-                        {fmtMonthYY(m.year, m.month)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {[
-                    { key: "revenue", label: "Revenue" },
-                    { key: "cogs", label: "COGS" },
-                    { key: "gross_margin", label: "Gross Margin" },
-                    { key: "overhead_total", label: "Overhead (Total)" },
-                    { key: "depreciation", label: "Depreciation" },
-                    { key: "ebit", label: "EBIT" },
-                    { key: "net_income", label: "Net Income" },
-                  ].map((row) => (
-                    <tr key={row.key} className="border-b last:border-0">
-                      <td className="sticky left-0 bg-white py-1 px-2 font-medium">
-                        {row.label}
-                      </td>
-                      {pl.months.map((m, i) => (
-                        <td
-                          key={i}
-                          className={`py-1 px-2 text-right ${getNumberClass(
-                            (m as any)[row.key],
-                          )}`}
-                        >
-                          {fmt((m as any)[row.key])}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* Product Modal */}
-      {openProd && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="relative bg-white w-[820px] max-w-[95vw] rounded-xl shadow p-5">
-            <div className="text-lg font-semibold mb-4">
-              {editingProd ? "Edit Product" : "Add Product"}
-            </div>
-            <div className="space-y-3">
-              <label className="block">
-                <div className="text-xs text-gray-500 mb-1">Name</div>
-                <input
-                  value={prodForm.name}
-                  onChange={(e) =>
-                    setProdForm((f) => ({ ...f, name: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 rounded-md border text-sm"
-                />
-              </label>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <label className="block">
-                  <div className="text-xs text-gray-500 mb-1">Price</div>
-                  <input
-                    type="number"
-                    value={prodForm.price}
-                    onChange={(e) =>
-                      setProdForm((f) => ({ ...f, price: e.target.value }))
-                    }
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                  />
-                </label>
-                <label className="block">
-                  <div className="text-xs text-gray-500 mb-1">Unit COGS</div>
-                  <input
-                    type="number"
-                    value={prodForm.unit_cogs}
-                    onChange={(e) =>
-                      setProdForm((f) => ({ ...f, unit_cogs: e.target.value }))
-                    }
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                  />
-                </label>
-              </div>
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={prodForm.is_active}
-                  onChange={(e) =>
-                    setProdForm((f) => ({ ...f, is_active: e.target.checked }))
-                  }
-                />
-                Active
-              </label>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                onClick={() => setOpenProd(false)}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                disabled={!isProdValid}
-                onClick={onSaveProd}
-                className="px-3 py-1.5 rounded-md bg-indigo-600 text-white disabled:opacity-50"
-              >
-                Save
-              </button>
-            </div>
+        <div className="overflow-x-auto border rounded bg-white">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-3 py-2 text-left">Y/M</th>
+                <th className="px-3 py-2 text-right">Revenue</th>
+                <th className="px-3 py-2 text-right">COGS</th>
+                <th className="px-3 py-2 text-right">Gross Margin</th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedule.rows.map((r) => (
+                <tr key={r.key} className="odd:bg-white even:bg-gray-50">
+                  <td className="px-3 py-2">
+                    {r.y}/{pad2(r.m)}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {r.revenue.toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {r.cogs.toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {r.gm.toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-emerald-50 font-semibold">
+                <td className="px-3 py-2">Totals</td>
+                <td className="px-3 py-2 text-right">
+                  {schedule.totals.revenue.toLocaleString()}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {schedule.totals.cogs.toLocaleString()}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  {schedule.totals.gm.toLocaleString()}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+          <div className="px-3 py-2 text-xs text-gray-500">
+            Not: Şimdilik yalnızca BOQ verileri baz alınır. Bir sonraki adımda
+            TWC’den NWC etkisi ve CAPEX’ten amortisman/servis başlangıcı dahil edeceğiz.
           </div>
         </div>
       )}
-
-      {/* Overhead Modal */}
-      {openOvh && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50">
-          <div className="relative bg-white w-[820px] max-w-[95vw] rounded-xl shadow p-5">
-            <div className="text-lg font-semibold mb-4">
-              {editingOvh ? "Edit Overhead" : "Add Overhead"}
-            </div>
-            <div className="space-y-3">
-              <label className="block">
-                <div className="text-xs text-gray-500 mb-1">Name</div>
-                <input
-                  value={ovhForm.name}
-                  onChange={(e) =>
-                    setOvhForm((f) => ({ ...f, name: e.target.value }))
-                  }
-                  className="w-full px-3 py-2 rounded-md border text-sm"
-                />
-              </label>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <label className="block">
-                  <div className="text-xs text-gray-500 mb-1">Type</div>
-                  <select
-                    value={ovhForm.type}
-                    onChange={(e) =>
-                      setOvhForm((f) => ({
-                        ...f,
-                        type: e.target.value as "fixed" | "%_revenue",
-                      }))
-                    }
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                  >
-                    <option value="fixed">Fixed</option>
-                    <option value="%_revenue">% of Revenue</option>
-                  </select>
-                </label>
-                <label className="block">
-                  <div className="text-xs text-gray-500 mb-1">
-                    {ovhForm.type === "%_revenue" ? "Amount (%)" : "Amount"}
-                  </div>
-                  <input
-                    type="number"
-                    value={ovhForm.amount}
-                    onChange={(e) =>
-                      setOvhForm((f) => ({ ...f, amount: e.target.value }))
-                    }
-                    className="w-full px-3 py-2 rounded-md border text-sm"
-                  />
-                </label>
-              </div>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button
-                onClick={() => setOpenOvh(false)}
-                className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button
-                disabled={!isOvhValid}
-                onClick={onSaveOvh}
-                className="px-3 py-1.5 rounded-md bg-indigo-600 text-white disabled:opacity-50"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }

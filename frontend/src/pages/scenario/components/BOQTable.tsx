@@ -1,8 +1,7 @@
-// frontend/src/pages/scenario/components/BOQTable.tsx
-import type React from "react";
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
 
+/* ---------- Types ---------- */
 type Props = {
   scenarioId: number;
   onChanged?: () => void;
@@ -12,24 +11,28 @@ type Props = {
 type BOQItem = {
   id?: number;
   scenario_id?: number;
+
   section?: string | null;
   category?: "bulk_with_freight" | "bulk_ex_freight" | "freight" | null;
+
   item_name: string;
   unit: string;
-  quantity: number;
-  unit_price: number;
-  unit_cogs?: number | null;
+
+  quantity: number | null | undefined;
+  unit_price: number | null | undefined;
+  unit_cogs?: number | null | undefined;
 
   frequency: "once" | "monthly" | "per_shipment" | "per_tonne";
-  months?: number | null;
+  months?: number | null | undefined;
 
-  start_year?: number | null;
-  start_month?: number | null;
+  start_year?: number | null | undefined;
+  start_month?: number | null | undefined;
 
-  is_active: boolean;
+  is_active: boolean | null | undefined;
   notes?: string | null;
 };
 
+/* ---------- Utils ---------- */
 function cls(...a: (string | false | undefined)[]) {
   return a.filter(Boolean).join(" ");
 }
@@ -40,8 +43,16 @@ function num(v: any): number {
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
+function addMonths(y: number, m: number, k: number) {
+  const d0 = new Date(y, m - 1, 1);
+  const d1 = new Date(d0.getFullYear(), d0.getMonth() + k, 1);
+  return { year: d1.getFullYear(), month: d1.getMonth() + 1 };
+}
+function ymKey(y: number, m: number) {
+  return `${y}-${pad2(m)}`;
+}
 
-/** --- Yerleşik ay/yıl seçici (type="month") --- */
+/* HTML5 month input (YYYY-MM) */
 function MonthInput({
   value,
   onChange,
@@ -51,20 +62,15 @@ function MonthInput({
   onChange: (next: { year: number | null; month: number | null }) => void;
   className?: string;
 }) {
-  // HTML month value string -> "YYYY-MM" | ""
   const str =
     value.year && value.month ? `${value.year}-${pad2(value.month)}` : "";
-
   return (
     <input
       type="month"
       value={str}
       onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-        const v = e.target.value; // "2026-03" | ""
-        if (!v) {
-          onChange({ year: null, month: null });
-          return;
-        }
+        const v = e.target.value; // "YYYY-MM" | ""
+        if (!v) return onChange({ year: null, month: null });
         const [y, m] = v.split("-").map((t) => Number(t));
         onChange({
           year: Number.isFinite(y) ? y : null,
@@ -85,11 +91,77 @@ const CATEGORY_OPTIONS: Array<BOQItem["category"]> = [
   "freight",
 ];
 
-export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props) {
+/* ---------- Pivot Preview Component ---------- */
+function MonthlyPreviewPivot({
+  rows,
+  totals,
+}: {
+  rows: Array<{ key: string; y: number; m: number; revenue: number; cogs: number; gm: number }>;
+  totals: { revenue: number; cogs: number; gm: number };
+}) {
+  const cols = rows.map((r) => `${r.y}/${pad2(r.m)}`);
+  const metrics = [
+    { key: "revenue", label: "Revenue" as const },
+    { key: "cogs", label: "COGS" as const },
+    { key: "gm", label: "GM" as const },
+  ] as const;
+
+  function getCell(metric: "revenue" | "cogs" | "gm", idx: number) {
+    const r = rows[idx];
+    return (r?.[metric] ?? 0).toLocaleString();
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full text-sm">
+        <thead className="bg-gray-50">
+          <tr>
+            <th className="px-3 py-2 text-left w-36">Metric</th>
+            {cols.map((c) => (
+              <th key={c} className="px-3 py-2 text-right whitespace-nowrap">
+                {c}
+              </th>
+            ))}
+            <th className="px-3 py-2 text-right">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {metrics.map((m) => (
+            <tr key={m.key} className="odd:bg-white even:bg-gray-50">
+              <td className="px-3 py-2 font-medium">{m.label}</td>
+              {rows.map((_, i) => (
+                <td key={i} className="px-3 py-2 text-right">
+                  {getCell(m.key, i)}
+                </td>
+              ))}
+              <td className="px-3 py-2 text-right font-semibold">
+                {totals[m.key].toLocaleString()}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="px-3 py-2 text-xs text-gray-500">
+        Not: <code>monthly</code> satırlar girilen <b>Duration</b> süresince yayılır;
+        <code> once</code>/<code>per_shipment</code>/<code>per_tonne</code> tek seferlik
+        kabul edilir.
+      </div>
+    </div>
+  );
+}
+
+/* ========================================================= */
+
+export default function BOQTable({
+  scenarioId,
+  onChanged,
+  onMarkedReady,
+}: Props) {
   const [rows, setRows] = useState<BOQItem[]>([]);
   const [draft, setDraft] = useState<BOQItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [showPreview, setShowPreview] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -105,20 +177,22 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
   }
   useEffect(() => {
     if (scenarioId) load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scenarioId]);
+  }, [scenarioId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // toplamları basitçe hesapla (Excel’deki satır GM = qty*(price-cogs))
+  /* Satır toplamları (liste üstünde) */
   const totals = useMemo(() => {
     let rev = 0,
       cogs = 0,
       gm = 0;
     for (const r of rows) {
-      const lineRev = num(r.quantity) * num(r.unit_price);
-      const lineCogs = num(r.quantity) * num(r.unit_cogs || 0);
-      rev += lineRev;
-      cogs += lineCogs;
-      gm += lineRev - lineCogs;
+      const q = num(r.quantity);
+      const p = num(r.unit_price);
+      const uc = num(r.unit_cogs ?? 0);
+      const lr = q * p;
+      const lc = q * uc;
+      rev += lr;
+      cogs += lc;
+      gm += lr - lc;
     }
     return { rev, cogs, gm };
   }, [rows]);
@@ -202,6 +276,84 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
     }
   }
 
+  /* ======= Monthly Preview (strict TS uyumlu) ======= */
+  type MonthAgg = { revenue: number; cogs: number; gm: number };
+
+  function getOrInit(map: Map<string, MonthAgg>, key: string): MonthAgg {
+    const cur = map.get(key);
+    if (cur) return cur;
+    const blank: MonthAgg = { revenue: 0, cogs: 0, gm: 0 };
+    map.set(key, blank);
+    return blank;
+  }
+
+  const schedule = useMemo(() => {
+    const agg = new Map<string, MonthAgg>();
+    const HORIZON = 36;
+
+    const active = rows.filter(
+      (r): r is BOQItem & { is_active: true; start_year: number; start_month: number } =>
+        !!r.is_active &&
+        typeof r.start_year === "number" &&
+        typeof r.start_month === "number"
+    );
+
+    for (const r of active) {
+      const qty = num(r.quantity);
+      const price = num(r.unit_price);
+      const uc = num(r.unit_cogs ?? 0);
+      const lineRev = qty * price;
+      const lineCogs = qty * uc;
+
+      const startY = r.start_year!;
+      const startM = r.start_month!;
+
+      const freq = r.frequency;
+      if (freq === "monthly") {
+        const len = Math.max(1, num(r.months ?? 1));
+        for (let k = 0; k < Math.min(len, HORIZON); k++) {
+          const { year, month } = addMonths(startY, startM, k);
+          const key = ymKey(year, month);
+          const cur = getOrInit(agg, key);
+          cur.revenue += lineRev;
+          cur.cogs += lineCogs;
+          cur.gm += lineRev - lineCogs;
+        }
+      } else {
+        const key = ymKey(startY, startM);
+        const cur = getOrInit(agg, key);
+        cur.revenue += lineRev;
+        cur.cogs += lineCogs;
+        cur.gm += lineRev - lineCogs;
+      }
+    }
+
+    const rowsOut = [...(agg.entries() as IterableIterator<[string, MonthAgg]>)]
+      .map(([key, v]) => ({
+        key,
+        y: Number(key.slice(0, 4)),
+        m: Number(key.slice(5, 7)),
+        revenue: v.revenue,
+        cogs: v.cogs,
+        gm: v.gm,
+      }))
+      .sort((a, b) => a.y - b.y || a.m - b.m);
+
+    const totals = rowsOut.reduce(
+      (s, r) => {
+        s.revenue += r.revenue;
+        s.cogs += r.cogs;
+        s.gm += r.gm;
+        return s;
+      },
+      { revenue: 0, cogs: 0, gm: 0 }
+    );
+
+    return { rows: rowsOut, totals };
+  }, [rows]);
+
+  /* ========================================================= */
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -219,6 +371,13 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
             className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
           >
             + Add BOQ Item
+          </button>
+          <button
+            onClick={() => setShowPreview((v) => !v)}
+            className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            title="Aylık simülasyon (Revenue/COGS/GM)"
+          >
+            {showPreview ? "Hide Preview" : "Show Preview"}
           </button>
           <button
             onClick={markReady}
@@ -247,7 +406,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
               <th className="px-3 py-2 text-right">Unit Price</th>
               <th className="px-3 py-2 text-right">Unit COGS</th>
               <th className="px-3 py-2">Freq</th>
-              <th className="px-3 py-2 text-right">Months</th>
+              <th className="px-3 py-2 text-right">Duration</th>
               <th className="px-3 py-2">Start (Y/M)</th>
               <th className="px-3 py-2">Active</th>
               <th className="px-3 py-2 text-right">Line Rev</th>
@@ -307,7 +466,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                   <input
                     type="number"
                     className="w-full px-2 py-1 rounded border border-gray-300 text-right"
-                    value={draft.quantity}
+                    value={num(draft.quantity)}
                     onChange={(e) =>
                       setDraft({ ...draft, quantity: Number(e.target.value) })
                     }
@@ -317,7 +476,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                   <input
                     type="number"
                     className="w-full px-2 py-1 rounded border border-gray-300 text-right"
-                    value={draft.unit_price}
+                    value={num(draft.unit_price)}
                     onChange={(e) =>
                       setDraft({ ...draft, unit_price: Number(e.target.value) })
                     }
@@ -327,7 +486,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                   <input
                     type="number"
                     className="w-full px-2 py-1 rounded border border-gray-300 text-right"
-                    value={draft.unit_cogs ?? 0}
+                    value={num(draft.unit_cogs ?? 0)}
                     onChange={(e) =>
                       setDraft({ ...draft, unit_cogs: Number(e.target.value) })
                     }
@@ -361,10 +520,11 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                         months: e.target.value === "" ? null : Number(e.target.value),
                       })
                     }
+                    title="Duration in months"
+                    placeholder="months"
                   />
                 </td>
                 <td className="px-3 py-2">
-                  {/* Yıl/Ay yerine tek month-picker */}
                   <MonthInput
                     value={{
                       year: draft.start_year ?? null,
@@ -383,16 +543,16 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                   />
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {num(draft.quantity * draft.unit_price)}
+                  {(num(draft.quantity) * num(draft.unit_price)).toLocaleString()}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {num(draft.quantity * (draft.unit_cogs ?? 0))}
+                  {(num(draft.quantity) * num(draft.unit_cogs ?? 0)).toLocaleString()}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {num(
-                    draft.quantity * draft.unit_price -
-                      draft.quantity * (draft.unit_cogs ?? 0)
-                  )}
+                  {(
+                    num(draft.quantity) * num(draft.unit_price) -
+                    (num(draft.quantity) * num(draft.unit_cogs ?? 0))
+                  ).toLocaleString()}
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2">
@@ -415,7 +575,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
 
             {rows.map((r) => {
               const lineRev = num(r.quantity) * num(r.unit_price);
-              const lineCogs = num(r.quantity) * num(r.unit_cogs || 0);
+              const lineCogs = num(r.quantity) * num(r.unit_cogs ?? 0);
               const lineGM = lineRev - lineCogs;
 
               return (
@@ -480,9 +640,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                       value={r.unit}
                       onChange={(e) =>
                         setRows((p) =>
-                          p.map((x) =>
-                            x.id === r.id ? { ...x, unit: e.target.value } : x
-                          )
+                          p.map((x) => (x.id === r.id ? { ...x, unit: e.target.value } : x))
                         )
                       }
                     />
@@ -491,11 +649,13 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                     <input
                       type="number"
                       className="w-full px-2 py-1 rounded border border-gray-300 text-right"
-                      value={r.quantity}
+                      value={num(r.quantity)}
                       onChange={(e) =>
                         setRows((p) =>
                           p.map((x) =>
-                            x.id === r.id ? { ...x, quantity: Number(e.target.value) } : x
+                            x.id === r.id
+                              ? { ...x, quantity: Number(e.target.value) }
+                              : x
                           )
                         )
                       }
@@ -505,7 +665,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                     <input
                       type="number"
                       className="w-full px-2 py-1 rounded border border-gray-300 text-right"
-                      value={r.unit_price}
+                      value={num(r.unit_price)}
                       onChange={(e) =>
                         setRows((p) =>
                           p.map((x) =>
@@ -521,7 +681,7 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                     <input
                       type="number"
                       className="w-full px-2 py-1 rounded border border-gray-300 text-right"
-                      value={r.unit_cogs ?? 0}
+                      value={num(r.unit_cogs ?? 0)}
                       onChange={(e) =>
                         setRows((p) =>
                           p.map((x) =>
@@ -576,11 +736,16 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                           )
                         )
                       }
+                      title="Duration in months"
+                      placeholder="months"
                     />
                   </td>
                   <td className="px-3 py-2">
                     <MonthInput
-                      value={{ year: r.start_year ?? null, month: r.start_month ?? null }}
+                      value={{
+                        year: r.start_year ?? null,
+                        month: r.start_month ?? null,
+                      }}
                       onChange={({ year, month }) =>
                         setRows((p) =>
                           p.map((x) =>
@@ -599,15 +764,17 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
                       onChange={(e) =>
                         setRows((p) =>
                           p.map((x) =>
-                            x.id === r.id ? { ...x, is_active: e.target.checked } : x
+                            x.id === r.id
+                              ? { ...x, is_active: e.target.checked }
+                              : x
                           )
                         )
                       }
                     />
                   </td>
-                  <td className="px-3 py-2 text-right">{lineRev}</td>
-                  <td className="px-3 py-2 text-right">{lineCogs}</td>
-                  <td className="px-3 py-2 text-right">{lineGM}</td>
+                  <td className="px-3 py-2 text-right">{lineRev.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right">{lineCogs.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right">{lineGM.toLocaleString()}</td>
                   <td className="px-3 py-2">
                     <div className="flex gap-2">
                       <button
@@ -631,17 +798,32 @@ export default function BOQTable({ scenarioId, onChanged, onMarkedReady }: Props
 
           <tfoot>
             <tr className="bg-gray-100 font-semibold">
-              <td className="px-3 py-2" colSpan={12}>
+              <td className="px-3 py-2" colSpan={11}>
                 Totals
               </td>
-              <td className="px-3 py-2 text-right">{totals.rev}</td>
-              <td className="px-3 py-2 text-right">{totals.cogs}</td>
-              <td className="px-3 py-2 text-right">{totals.gm}</td>
+              <td className="px-3 py-2 text-right">
+                {totals.rev.toLocaleString()}
+              </td>
+              <td className="px-3 py-2 text-right">
+                {totals.cogs.toLocaleString()}
+              </td>
+              <td className="px-3 py-2 text-right">
+                {totals.gm.toLocaleString()}
+              </td>
               <td />
             </tr>
           </tfoot>
         </table>
       </div>
+
+      {showPreview && (
+        <div className="mt-3 border rounded bg-white">
+          <div className="px-3 py-2 border-b bg-gray-50 font-medium">
+            Preview • Monthly schedule (active items)
+          </div>
+          <MonthlyPreviewPivot rows={schedule.rows} totals={schedule.totals} />
+        </div>
+      )}
     </div>
   );
 }
