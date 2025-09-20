@@ -28,7 +28,7 @@ import LeadDetailPage from "./pages/LeadDetail";
 
 // NEW
 import BusinessCasePage from "./pages/BusinessCase";
-// 🔧 FIX: tabs’lı sayfa
+// Tabs’lı senaryo sayfası
 import ScenarioPage from "./pages/scenario/Scenario";
 
 import { apiGet, ApiError } from "./lib/api";
@@ -335,6 +335,9 @@ export default function App() {
                 </RequireAuth>
               }
             />
+
+            {/* Catch-all → Dashboard */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
       </div>

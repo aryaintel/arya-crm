@@ -175,16 +175,17 @@ async function request<T>(
 }
 
 /** ---------- Shorthands ---------- */
+// body'yi opsiyonel yaptık → mark-services-ready gibi gövdesiz POST'lar sorunsuz çalışır.
 export function apiGet<T>(path: string, token?: string | null, timeoutMs?: number) {
   return request<T>("GET", path, undefined, token, timeoutMs);
 }
-export function apiPost<T>(path: string, body: unknown, token?: string | null, timeoutMs?: number) {
+export function apiPost<T>(path: string, body?: unknown, token?: string | null, timeoutMs?: number) {
   return request<T>("POST", path, body, token, timeoutMs);
 }
-export function apiPut<T>(path: string, body: unknown, token?: string | null, timeoutMs?: number) {
+export function apiPut<T>(path: string, body?: unknown, token?: string | null, timeoutMs?: number) {
   return request<T>("PUT", path, body, token, timeoutMs);
 }
-export function apiPatch<T>(path: string, body: unknown, token?: string | null, timeoutMs?: number) {
+export function apiPatch<T>(path: string, body?: unknown, token?: string | null, timeoutMs?: number) {
   return request<T>("PATCH", path, body, token, timeoutMs);
 }
 export function apiDelete(path: string, token?: string | null, timeoutMs?: number) {

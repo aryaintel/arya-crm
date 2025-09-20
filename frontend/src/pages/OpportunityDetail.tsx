@@ -59,6 +59,7 @@ export default function OpportunityDetailPage() {
 
   // NEW — Scenario create modal state
   const [openScenario, setOpenScenario] = useState(false);
+  const [savingScenario, setSavingScenario] = useState(false);
   const [scenarioForm, setScenarioForm] = useState<{ name: string; months: string; start_date: string }>(() => ({
     name: "",
     months: "36",
@@ -96,7 +97,9 @@ export default function OpportunityDetailPage() {
       );
       setBc(data ?? null);
       // Opp objesini bc id ile zenginleştir
-      setOpp((prev) => (prev ? { ...prev, business_case_id: data.id } : prev));
+      setOpp((prev) =>
+        prev ? { ...prev, business_case_id: data.id } : prev
+      );
     } catch {
       setBc(null);
     } finally {
@@ -184,7 +187,7 @@ export default function OpportunityDetailPage() {
 
   // NEW — save scenario for current BC
   const onSaveScenario = async () => {
-    if (!bc?.id || !scenarioValid) return;
+    if (!bc?.id || !scenarioValid || savingScenario) return;
     const body = {
       business_case_id: bc.id,
       name: scenarioForm.name.trim(),
@@ -192,16 +195,23 @@ export default function OpportunityDetailPage() {
       start_date: scenarioForm.start_date, // "YYYY-MM-DD"
     };
     try {
+      setSavingScenario(true);
       await apiPost("/business-cases/scenarios", body);
       setOpenScenario(false);
       await fetchBC(bc.id); // listeyi tazele
     } catch (e: any) {
-      alert(
-        (e instanceof ApiError && e.message) ||
-          e?.response?.data?.detail ||
-          e?.message ||
-          "Failed to create scenario"
-      );
+      if (e instanceof ApiError && e.status === 409) {
+        alert("Scenario name must be unique per business case.");
+      } else {
+        alert(
+          (e instanceof ApiError && e.message) ||
+            e?.response?.data?.detail ||
+            e?.message ||
+            "Failed to create scenario"
+        );
+      }
+    } finally {
+      setSavingScenario(false);
     }
   };
 
@@ -264,7 +274,11 @@ export default function OpportunityDetailPage() {
                   <KV label="Owner" value={opp.owner_email ?? opp.owner_id} />
                   <KV
                     label="Amount"
-                    value={opp.amount != null ? opp.amount.toLocaleString() : "—"}
+                    value={
+                      opp.amount != null
+                        ? `${opp.currency ? `${opp.currency} ` : ""}${opp.amount.toLocaleString()}`
+                        : "—"
+                    }
                   />
                   <KV label="Currency" value={opp.currency ?? "—"} />
                   <KV
@@ -454,11 +468,11 @@ export default function OpportunityDetailPage() {
               Cancel
             </button>
             <button
-              disabled={!scenarioValid}
+              disabled={!scenarioValid || savingScenario}
               onClick={onSaveScenario}
               className="px-3 py-1.5 rounded-md bg-indigo-600 text-white disabled:opacity-50"
             >
-              Save
+              {savingScenario ? "Saving…" : "Save"}
             </button>
           </div>
         </Modal>

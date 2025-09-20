@@ -1,3 +1,4 @@
+# backend/app/api/business_cases.py
 from datetime import date
 from typing import List, Optional, Dict, Any, Tuple, Literal
 
@@ -12,6 +13,7 @@ from ..models import (
     ScenarioProduct,
     ScenarioProductMonth,
     ScenarioOverhead,
+    ScenarioService,               # <-- NEW: services P&L'e katılıyor
     Opportunity,
 )
 from .deps import get_db, get_current_user, CurrentUser, require_permissions
@@ -22,11 +24,9 @@ router = APIRouter(prefix="/business-cases", tags=["business-cases"])
 # Pydantic Schemas
 # ---------------------------
 
-
 class BusinessCaseCreate(BaseModel):
     opportunity_id: int = Field(..., description="Opportunity ID (1:1 relationship)")
     name: str = Field(..., min_length=1, max_length=255)
-
 
 class ScenarioCreate(BaseModel):
     business_case_id: int
@@ -34,12 +34,10 @@ class ScenarioCreate(BaseModel):
     months: conint(gt=0, le=120) = 36
     start_date: date
 
-
 class ProductCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     price: confloat(ge=0) = 0.0
     unit_cogs: confloat(ge=0) = 0.0
-
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
@@ -47,17 +45,14 @@ class ProductUpdate(BaseModel):
     unit_cogs: Optional[confloat(ge=0)] = None
     is_active: Optional[bool] = None
 
-
 class MonthQty(BaseModel):
     year: conint(ge=1900, le=2200)
     month: conint(ge=1, le=12)
     quantity: confloat(ge=0) = 0.0
 
-
 class PLParams(BaseModel):
     # MVP için boş – gelecekte: WACC, discount toggle vs.
     pass
-
 
 class ScenarioOut(BaseModel):
     id: int
@@ -68,7 +63,6 @@ class ScenarioOut(BaseModel):
     class Config:
         from_attributes = True
 
-
 class BusinessCaseOut(BaseModel):
     id: int
     opportunity_id: int
@@ -78,13 +72,11 @@ class BusinessCaseOut(BaseModel):
     class Config:
         from_attributes = True
 
-
 # ---- Scenario Detail Schemas ----
 class ProductMonthOut(BaseModel):
     year: int
     month: int
     quantity: float
-
 
 class ProductWithMonthsOut(BaseModel):
     id: int
@@ -94,13 +86,11 @@ class ProductWithMonthsOut(BaseModel):
     is_active: bool
     months: List[ProductMonthOut]
 
-
 class OverheadOut(BaseModel):
     id: int
     name: str
     type: str
     amount: float
-
 
 class ScenarioDetailOut(BaseModel):
     id: int
@@ -111,24 +101,20 @@ class ScenarioDetailOut(BaseModel):
     products: List[ProductWithMonthsOut]
     overheads: List[OverheadOut]
 
-
 # ---- Overhead Create/Update Schemas ----
 class OverheadCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     type: Literal["fixed", "%_revenue"]
     amount: confloat(ge=0) = 0.0
 
-
 class OverheadUpdate(BaseModel):
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     type: Optional[Literal["fixed", "%_revenue"]] = None
     amount: Optional[confloat(ge=0)] = None
 
-
 # ---------------------------
 # Helpers
 # ---------------------------
-
 
 def _ensure_opportunity_in_tenant(
     db: Session, tenant_id: int, opportunity_id: int
@@ -144,7 +130,6 @@ def _ensure_opportunity_in_tenant(
         )
     return opp
 
-
 def _ensure_business_case_in_tenant(db: Session, tenant_id: int, bc_id: int) -> BusinessCase:
     bc = (
         db.query(BusinessCase)
@@ -155,7 +140,6 @@ def _ensure_business_case_in_tenant(db: Session, tenant_id: int, bc_id: int) -> 
     if not bc:
         raise HTTPException(status_code=404, detail="Business case not found")
     return bc
-
 
 def _ensure_scenario_in_tenant(db: Session, tenant_id: int, scenario_id: int) -> Scenario:
     sc = (
@@ -168,7 +152,6 @@ def _ensure_scenario_in_tenant(db: Session, tenant_id: int, scenario_id: int) ->
     if not sc:
         raise HTTPException(status_code=404, detail="Scenario not found")
     return sc
-
 
 def _ensure_product_in_tenant(
     db: Session, tenant_id: int, product_id: int
@@ -185,7 +168,6 @@ def _ensure_product_in_tenant(
         raise HTTPException(status_code=404, detail="Scenario product not found")
     return prod
 
-
 def _ensure_overhead_in_tenant(
     db: Session, tenant_id: int, overhead_id: int
 ) -> ScenarioOverhead:
@@ -201,11 +183,9 @@ def _ensure_overhead_in_tenant(
         raise HTTPException(status_code=404, detail="Scenario overhead not found")
     return ovh
 
-
 # ---------------------------
 # Endpoints
 # ---------------------------
-
 
 @router.post(
     "/",
@@ -241,7 +221,6 @@ def create_business_case(
         {"id": bc.id, "opportunity_id": bc.opportunity_id, "name": bc.name, "scenarios": []}
     )
 
-
 @router.get(
     "/{business_case_id}",
     response_model=BusinessCaseOut,
@@ -269,7 +248,6 @@ def get_business_case(
             "scenarios": scenarios,
         }
     )
-
 
 # ---------- NEW: Get Business Case by Opportunity (includes scenarios) ----------
 @router.get(
@@ -307,11 +285,8 @@ def get_business_case_by_opportunity(
         }
     )
 
-
 # -------- Scenarios --------
-
 scenarios_router = APIRouter(prefix="/scenarios", tags=["scenarios"])
-
 
 @scenarios_router.post(
     "",
@@ -343,7 +318,6 @@ def create_scenario(
         )
     db.refresh(sc)
     return sc
-
 
 @scenarios_router.get(
     "/{scenario_id}",
@@ -424,7 +398,6 @@ def get_scenario_detail(
         overheads=overheads_out,
     )
 
-
 @scenarios_router.post(
     "/{scenario_id}/products",
     response_model=Dict[str, Any],
@@ -460,7 +433,6 @@ def add_product_to_scenario(
         "is_active": prod.is_active,
     }
 
-
 @scenarios_router.patch(
     "/products/{product_id}",
     response_model=Dict[str, Any],
@@ -491,7 +463,6 @@ def update_product(
         "is_active": prod.is_active,
     }
 
-
 @scenarios_router.delete(
     "/products/{product_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -507,7 +478,6 @@ def delete_product(
     db.delete(prod)
     db.commit()
     return None
-
 
 @scenarios_router.put(
     "/products/{product_id}/months",
@@ -542,9 +512,7 @@ def upsert_product_months(
 
     return {"updated": len(payload), "product_id": prod.id}
 
-
 # ---- Overheads CRUD ----
-
 
 @scenarios_router.post(
     "/{scenario_id}/overheads",
@@ -575,7 +543,6 @@ def create_overhead(
         id=ovh.id, name=ovh.name, type=ovh.type, amount=float(ovh.amount or 0)
     )
 
-
 @scenarios_router.patch(
     "/overheads/{overhead_id}",
     response_model=OverheadOut,
@@ -599,7 +566,6 @@ def update_overhead(
         id=ovh.id, name=ovh.name, type=ovh.type, amount=float(ovh.amount or 0)
     )
 
-
 @scenarios_router.delete(
     "/overheads/{overhead_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -616,14 +582,12 @@ def delete_overhead(
     db.commit()
     return None
 
-
-# ---- Compute ----
-
+# ---- Compute (P&L) ----
 
 @scenarios_router.post(
     "/{scenario_id}/compute",
     response_model=Dict[str, Any],
-    summary="Compute monthly P&L for a scenario (MVP + Depreciation)",
+    summary="Compute monthly P&L for a scenario (Revenue, COGS, Overheads, Services OPEX, Depreciation)",
     dependencies=[Depends(require_permissions(["cases:read"]))],
 )
 def compute_scenario_pl(
@@ -668,7 +632,84 @@ def compute_scenario_pl(
     for r in rows:
         rev_cogs[(int(r.y), int(r.m))] = (float(r.revenue or 0), float(r.cogs or 0))
 
-    # ---- CAPEX → Monthly Depreciation (straight-line, disposal-aware, effective amount)
+    # ---- Services (OPEX) monthly expense
+    # P&L için giderler: monthly veya annual_prepaid fark etmeksizin aylık ayrıştırılır.
+    # one_time → sadece başlangıç ayına P&L gideri olarak yazılır.
+    def next_ym(y: int, m: int) -> Tuple[int, int]:
+        return (y + 1, 1) if m == 12 else (y, m + 1)
+
+    timeline: List[Tuple[int, int]] = []
+    ty, tm = sc.start_date.year, sc.start_date.month
+    for _i in range(sc.months):
+        timeline.append((ty, tm))
+        ty, tm = next_ym(ty, tm)
+    timeline_set = set(timeline)
+
+    services: List[ScenarioService] = (
+        db.query(ScenarioService)
+        .filter(ScenarioService.scenario_id == sc.id, ScenarioService.is_active.is_(True))
+        .all()
+    )
+    services_by_ym: Dict[Tuple[int, int], float] = {}
+
+    for s in services:
+        start_y, start_m = int(s.start_year), int(s.start_month)
+        # bitiş: duration_months öncelikli, yoksa end_y/m, hiçbiri yoksa 1 ay (one_time ise zaten tek ay)
+        if s.duration_months and s.duration_months > 0:
+            total_months = int(s.duration_months)
+            ey, em = start_y, start_m
+            for _ in range(total_months - 1):
+                ey, em = next_ym(ey, em)
+        elif s.end_year and s.end_month:
+            ey, em = int(s.end_year), int(s.end_month)
+            # güvenlik: eğer end < start ise tek ay
+            if (ey < start_y) or (ey == start_y and em < start_m):
+                ey, em = start_y, start_m
+        else:
+            # default: one_time ise bir ay, değilse senaryo süresi kadar (başlangıçtan itibaren)
+            if s.payment_term == "one_time":
+                ey, em = start_y, start_m
+            else:
+                # senaryonun bitiş ayı
+                ey, em = timeline[-1]
+
+        # baz tutar
+        base = float(s.unit_cost or 0.0) * float(s.quantity or 0.0)
+
+        # aylara yaz
+        y, m = start_y, start_m
+        idx = 0
+        while True:
+            if (y, m) in timeline_set:
+                # escalation: yıllıksa başlangıç yıl dönümlerinde artış
+                if (s.escalation_freq or "none") == "annual":
+                    # kaç yıl geçti (ay bazlı floor)
+                    years_passed = max(0, ((y - start_y) * 12 + (m - start_m)) // 12)
+                    factor = (1.0 + float(s.escalation_pct or 0.0)) ** years_passed
+                else:
+                    factor = 1.0
+
+                # P&L'de vergi dahil/haric
+                expense = base * factor
+                if bool(s.expense_includes_tax) and float(s.tax_rate or 0) > 0:
+                    expense = expense / (1.0 + float(s.tax_rate))
+
+                if s.payment_term == "one_time":
+                    # tek ay
+                    services_by_ym[(y, m)] = services_by_ym.get((y, m), 0.0) + expense
+                else:
+                    # aylık ayrıştırma
+                    services_by_ym[(y, m)] = services_by_ym.get((y, m), 0.0) + expense
+
+            # durma koşulu
+            if y == ey and m == em:
+                break
+            y, m = next_ym(y, m)
+            idx += 1
+            if idx > 2000:  # güvenlik
+                break
+
+    # ---- CAPEX → Monthly Depreciation (straight-line)
     capex_rows = db.execute(
         text(
             """
@@ -690,18 +731,6 @@ def compute_scenario_pl(
         {"sid": sc.id},
     ).mappings().all()
 
-    # Scenario timeline
-    def _next_ym(y: int, m: int) -> Tuple[int, int]:
-        return (y + 1, 1) if m == 12 else (y, m + 1)
-
-    timeline: List[Tuple[int, int]] = []
-    ty, tm = sc.start_date.year, sc.start_date.month
-    for _i in range(sc.months):
-        timeline.append((ty, tm))
-        ty, tm = _next_ym(ty, tm)
-    timeline_set = set(timeline)
-
-    # Accumulate depreciation per (y,m)
     depr_by_ym: Dict[Tuple[int, int], float] = {}
 
     for r in capex_rows:
@@ -712,7 +741,7 @@ def compute_scenario_pl(
         if life <= 0:
             continue
 
-        # effective amount: per_unit_cost * quantity * (1 + contingency%)  OR amount
+        # effective amount
         puc = r.get("per_unit_cost")
         qty = r.get("quantity")
         cntg = float(r.get("contingency_pct") or 0.0)
@@ -728,26 +757,22 @@ def compute_scenario_pl(
             continue
 
         method = (r.get("method") or "straight_line").lower()
-        # şimdilik sadece straight-line
-        monthly = base / life
+        monthly = base / life  # şimdilik straight-line
 
         y0 = int(r["ssy"])
         m0 = int(r["ssm"])
 
-        # Disposal: elden çıkarma ayından ÖNCE dur (disposal ayı dahil edilmez)
         dpy = r.get("disposal_year")
         dpm = r.get("disposal_month")
         has_disposal = dpy is not None and dpm is not None
 
         y, m = y0, m0
         for _k in range(life):
-            # disposal kontrolü
             if has_disposal and (y > dpy or (y == dpy and m >= dpm)):
                 break
-
             if (y, m) in timeline_set:
                 depr_by_ym[(y, m)] = depr_by_ym.get((y, m), 0.0) + monthly
-            y, m = _next_ym(y, m)
+            y, m = next_ym(y, m)
 
     # ---- Build monthly PL
     months_out: List[Dict[str, Any]] = []
@@ -760,9 +785,10 @@ def compute_scenario_pl(
         overhead_var = revenue * (pct_sum / 100.0)
         overhead_total = fixed_sum + overhead_var
 
+        services_expense = services_by_ym.get(key, 0.0)
         depreciation = depr_by_ym.get(key, 0.0)
 
-        ebit = gross_margin - overhead_total - depreciation
+        ebit = gross_margin - overhead_total - services_expense - depreciation
 
         months_out.append(
             {
@@ -775,8 +801,9 @@ def compute_scenario_pl(
                 "overhead_var_pct": pct_sum,
                 "overhead_var_amount": round(overhead_var, 4),
                 "overhead_total": round(overhead_total, 4),
+                "services_expense": round(services_expense, 4),  # <-- NEW
                 "depreciation": round(depreciation, 4),
-                "depr": round(depreciation, 4),  # <-- alias for frontend compatibility
+                "depr": round(depreciation, 4),                  # alias
                 "ebit": round(ebit, 4),
                 "net_income": round(ebit, 4),
             }
@@ -794,8 +821,9 @@ def compute_scenario_pl(
         "overhead_fixed_total": round(fixed_sum * len(months_out), 4),
         "overhead_var_total": round(sum(x["overhead_var_amount"] for x in months_out), 4),
         "overhead_total": round(sum(x["overhead_total"] for x in months_out), 4),
+        "services_expense_total": round(sum(x["services_expense"] for x in months_out), 4),  # NEW
         "depreciation_total": round(sum(x["depreciation"] for x in months_out), 4),
-        "depr_total": round(sum(x["depreciation"] for x in months_out), 4),  # <-- alias
+        "depr_total": round(sum(x["depreciation"] for x in months_out), 4),
         "ebit": round(sum(x["ebit"] for x in months_out), 4),
         "net_income": round(sum(x["net_income"] for x in months_out), 4),
     }
@@ -815,7 +843,6 @@ def compute_scenario_pl(
         "months": months_out,
         "totals": totals,
     }
-
 
 # Register scenarios sub-router under main
 router.include_router(scenarios_router)

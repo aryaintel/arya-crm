@@ -1,12 +1,13 @@
 // frontend/src/pages/Scenario.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { apiGet } from "../../lib/api";
+import { apiGet, apiPost } from "../../lib/api";
 
 // Tabs
 import BOQTable from "../scenario/components/BOQTable";
 import TWCTab from "../scenario/tabs/TWCTab";
 import CapexTable from "../scenario/components/CapexTable";
+import ServicesTable from "../scenario/components/ServicesTable"; // NEW
 
 // ---------- Types ----------
 type ScenarioDetail = {
@@ -19,10 +20,11 @@ type ScenarioDetail = {
 
 type Workflow = {
   scenario_id: number;
-  workflow_state: "draft" | "twc" | "capex" | "ready" | string;
-  is_boq_ready: boolean;
-  is_twc_ready: boolean;
-  is_capex_ready: boolean;
+  workflow_state?: "draft" | "twc" | "capex" | "services" | "ready" | string;
+  is_boq_ready?: boolean;
+  is_twc_ready?: boolean;
+  is_capex_ready?: boolean;
+  is_services_ready?: boolean; // NEW
 };
 
 // ---------- Utils ----------
@@ -53,10 +55,27 @@ export default function ScenarioPage() {
     | "pl"
     | "boq"
     | "twc"
-    | "capex";
+    | "capex"
+    | "services";
 
-  function setTabSafe(next: "pl" | "boq" | "twc" | "capex") {
-    if (!flow) return;
+  // Guard'sız ham sekme değiştirici — Mark Ready akışlarında kullanılır
+  function setTabRaw(next: "pl" | "boq" | "twc" | "capex" | "services") {
+    setSp(
+      (p) => {
+        p.set("tab", next);
+        return p;
+      },
+      { replace: true }
+    );
+  }
+
+  // Guard'lı normal sekme geçişi
+  function setTabSafe(next: "pl" | "boq" | "twc" | "capex" | "services") {
+    // flow henüz yoksa engelleme — kullanıcı gezinmeye devam edebilsin
+    if (!flow) {
+      setTabRaw(next);
+      return;
+    }
 
     if (next === "twc" && !flow.is_boq_ready) {
       alert("Önce 1. BOQ sekmesinde 'Mark Ready' yapmalısınız.");
@@ -66,15 +85,16 @@ export default function ScenarioPage() {
       alert("Önce 2. TWC sekmesinde 'Mark Ready' yapmalısınız.");
       return;
     }
-    if (next === "pl" && !flow.is_capex_ready) {
+    if (next === "services" && !flow.is_capex_ready) {
       alert("Önce 3. CAPEX sekmesinde 'Mark Ready' yapmalısınız.");
       return;
     }
+    if (next === "pl" && !flow.is_services_ready) {
+      alert("Önce 4. SERVICES sekmesinde 'Mark Ready' yapmalısınız.");
+      return;
+    }
 
-    setSp((p) => {
-      p.set("tab", next);
-      return p;
-    }, { replace: true });
+    setTabRaw(next);
   }
 
   async function loadAll() {
@@ -89,6 +109,7 @@ export default function ScenarioPage() {
       setFlow(wf);
     } catch (e: any) {
       setErr(e?.message || "Failed to load scenario.");
+      setFlow(null);
     } finally {
       setLoading(false);
     }
@@ -106,7 +127,23 @@ export default function ScenarioPage() {
 
   const canGoTWC = !!flow?.is_boq_ready;
   const canGoCAPEX = !!flow?.is_twc_ready;
-  const canGoPL = !!flow?.is_capex_ready;
+  const canGoSERVICES = !!flow?.is_capex_ready; // NEW
+  const canGoPL = !!flow?.is_services_ready; // NEW
+
+  // --- Actions ---
+  async function markServicesReady() {
+    try {
+      // backend endpoint: /scenarios/{scenario_id}/workflow/mark-services-ready
+      await apiPost(`/scenarios/${id}/workflow/mark-services-ready`, {});
+      await loadAll();
+      // ready sonrası guard'a takılmadan P&L'e geç
+      setTabRaw("pl");
+    } catch (e: any) {
+      alert(e?.message || "Mark Services Ready başarısız.");
+    }
+  }
+
+  const stateSafe = (flow?.workflow_state ?? "draft").toUpperCase();
 
   return (
     <div className="space-y-4">
@@ -129,16 +166,19 @@ export default function ScenarioPage() {
             <span
               className={cls(
                 "px-2 py-1 rounded font-medium",
-                flow.workflow_state === "draft" && "bg-gray-100 text-gray-700",
+                (flow.workflow_state ?? "draft") === "draft" && "bg-gray-100 text-gray-700",
                 flow.workflow_state === "twc" && "bg-amber-100 text-amber-700",
                 flow.workflow_state === "capex" && "bg-sky-100 text-sky-700",
+                flow.workflow_state === "services" && "bg-purple-100 text-purple-700",
                 flow.workflow_state === "ready" && "bg-emerald-100 text-emerald-700"
               )}
               title={`BOQ:${flow.is_boq_ready ? "✓" : "•"}  TWC:${
                 flow.is_twc_ready ? "✓" : "•"
-              }  CAPEX:${flow.is_capex_ready ? "✓" : "•"}`}
+              }  CAPEX:${flow.is_capex_ready ? "✓" : "•"}  SERVICES:${
+                flow.is_services_ready ? "✓" : "•"
+              }`}
             >
-              State: {flow.workflow_state.toUpperCase()}
+              State: {stateSafe}
             </span>
           )}
           <button
@@ -150,8 +190,8 @@ export default function ScenarioPage() {
         </div>
       </div>
 
-      {/* Tabs — numaralı ve akış sırası: 1→4 */}
-      <div className="flex gap-2">
+      {/* Tabs — numaralı ve akış sırası: 1→5 */}
+      <div className="flex gap-2 flex-wrap">
         <button
           onClick={() => setTabSafe("boq")}
           className={cls(
@@ -190,6 +230,19 @@ export default function ScenarioPage() {
         </button>
 
         <button
+          onClick={() => setTabSafe("services")}
+          disabled={!canGoSERVICES}
+          className={cls(
+            "px-3 py-1 rounded border",
+            tab === "services" ? "bg-amber-50 border-amber-300" : "bg-white",
+            !canGoSERVICES && "opacity-50 cursor-not-allowed"
+          )}
+          title={!canGoSERVICES ? "Önce 3. CAPEX 'Ready' olmalı" : "Services (Input)"}
+        >
+          4. SERVICES
+        </button>
+
+        <button
           onClick={() => setTabSafe("pl")}
           disabled={!canGoPL}
           className={cls(
@@ -197,9 +250,9 @@ export default function ScenarioPage() {
             tab === "pl" ? "bg-emerald-50 border-emerald-300" : "bg-white",
             !canGoPL && "opacity-50 cursor-not-allowed"
           )}
-          title={!canGoPL ? "Önce 3. CAPEX 'Ready' olmalı" : "P&L (Output)"}
+          title={!canGoPL ? "Önce 4. SERVICES 'Ready' olmalı" : "P&L (Output)"}
         >
-          4. P&L
+          5. P&L
         </button>
       </div>
 
@@ -219,7 +272,8 @@ export default function ScenarioPage() {
                 onChanged={loadAll}
                 onMarkedReady={async () => {
                   await loadAll();
-                  setTabSafe("twc");
+                  // Guard'ı atlayarak bir sonraki adıma geç
+                  setTabRaw("twc");
                 }}
               />
             </div>
@@ -231,7 +285,7 @@ export default function ScenarioPage() {
                 scenarioId={id}
                 onMarkedReady={async () => {
                   await loadAll();
-                  setTabSafe("capex");
+                  setTabRaw("capex");
                 }}
               />
             </div>
@@ -244,9 +298,32 @@ export default function ScenarioPage() {
                 onChanged={loadAll}
                 onMarkedReady={async () => {
                   await loadAll();
-                  setTabSafe("pl");
+                  setTabRaw("services");
                 }}
               />
+            </div>
+          )}
+
+          {tab === "services" && (
+            <div className="rounded border p-4 bg-white space-y-4">
+              <ServicesTable scenarioId={id} />
+              <div className="flex items-center justify-end">
+                <button
+                  onClick={markServicesReady}
+                  className={cls(
+                    "px-3 py-2 rounded bg-purple-600 text-white hover:bg-purple-700",
+                    flow.is_services_ready && "opacity-60 cursor-not-allowed"
+                  )}
+                  disabled={!!flow.is_services_ready}
+                  title={
+                    flow.is_services_ready
+                      ? "Zaten hazır işaretlenmiş"
+                      : "Services'i Ready olarak işaretle"
+                  }
+                >
+                  Mark Services Ready
+                </button>
+              </div>
             </div>
           )}
 
@@ -254,8 +331,7 @@ export default function ScenarioPage() {
             <div className="rounded border p-6 bg-emerald-50/40">
               <h3 className="font-semibold text-lg mb-2">P&L (coming next)</h3>
               <p className="text-sm text-gray-700">
-                Workflow “READY” aşamasında bu ekranda P&L özetini ve aylık kırılımı
-                göstereceğiz.
+                Workflow “READY” aşamasında bu ekranda P&L özetini ve aylık kırılımı göstereceğiz.
               </p>
             </div>
           )}

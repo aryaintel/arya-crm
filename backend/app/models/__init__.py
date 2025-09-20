@@ -165,7 +165,7 @@ class Pipeline(Base):
 class Stage(Base):
     __tablename__ = "stages"
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
     pipeline_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String, nullable=False)
@@ -225,17 +225,19 @@ class Scenario(Base):
     months = Column(Integer, nullable=False, default=36)
     start_date = Column(Date, nullable=False)
 
-    # Excel sırası (Input tabları): BOQ -> TWC -> CAPEX -> (Calc) -> P&L
-    is_boq_ready   = Column(Boolean, nullable=False, default=False, server_default="0")
-    is_twc_ready   = Column(Boolean, nullable=False, default=False, server_default="0")
-    is_capex_ready = Column(Boolean, nullable=False, default=False, server_default="0")
-    workflow_state = Column(String,  nullable=False, default="draft", server_default="draft")
+    # Excel sırası (Input tabları): BOQ -> TWC -> CAPEX -> SERVICES -> (Calc) -> P&L
+    is_boq_ready       = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_twc_ready       = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_capex_ready     = Column(Boolean, nullable=False, default=False, server_default="0")
+    is_services_ready  = Column(Boolean, nullable=False, default=False, server_default="0")  # <-- NEW
+    workflow_state     = Column(String,  nullable=False, default="draft", server_default="draft")
 
     business_case = relationship("BusinessCase", back_populates="scenarios", lazy="selectin")
     products = relationship("ScenarioProduct", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
     overheads = relationship("ScenarioOverhead", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
     boq_items = relationship("ScenarioBOQItem", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
     capex_items = relationship("ScenarioCapex", backref="scenario", cascade="all, delete-orphan", lazy="selectin")
+    services = relationship("ScenarioService", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
         Index("ix_scenarios_bc", "business_case_id"),
@@ -352,6 +354,87 @@ class ScenarioBOQItem(Base):
             name="ck_boq_category",
         ),
         Index("ix_boq_scenario", "scenario_id"),
+    )
+
+
+# =========================
+# Scenario: SERVICES (OPEX)
+# =========================
+class ScenarioService(Base):
+    __tablename__ = "scenario_services"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
+
+    # Temel bilgiler
+    service_name = Column(String, nullable=False)
+    category = Column(String, nullable=True)
+    vendor = Column(String, nullable=True)
+    unit = Column(String, nullable=True)
+
+    # Fiyat / miktar
+    quantity = Column(Numeric(18, 4), nullable=False, default=1)
+    unit_cost = Column(Numeric(18, 4), nullable=False, default=0)
+    currency = Column(String(3), nullable=False, default="TRY")
+
+    # Zamanlama
+    start_year = Column(Integer, nullable=False)
+    start_month = Column(Integer, nullable=False)
+    duration_months = Column(Integer, nullable=True)
+    end_year = Column(Integer, nullable=True)
+    end_month = Column(Integer, nullable=True)
+
+    # Ödeme & Nakit
+    payment_term = Column(String, nullable=False, default="monthly")  # 'monthly' | 'annual_prepaid' | 'one_time'
+    cash_out_month_policy = Column(String, nullable=False, default="service_month")  # 'service_month' | 'start_month' | 'contract_anniversary'
+
+    # Endeks / Artış
+    escalation_pct = Column(Numeric(8, 4), nullable=False, default=0)
+    escalation_freq = Column(String, nullable=False, default="none")  # 'annual' | 'none'
+
+    # Vergi
+    tax_rate = Column(Numeric(8, 4), nullable=False, default=0)
+    expense_includes_tax = Column(Boolean, nullable=False, default=False, server_default="0")
+
+    # Diğer
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    scenario = relationship("Scenario", back_populates="services", lazy="selectin")
+    months = relationship("ScenarioServiceMonth", back_populates="service", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        CheckConstraint("payment_term IN ('monthly','annual_prepaid','one_time')", name="ck_services_payment_term"),
+        CheckConstraint(
+            "cash_out_month_policy IN ('service_month','start_month','contract_anniversary')",
+            name="ck_services_cash_out_policy",
+        ),
+        CheckConstraint("escalation_freq IN ('annual','none')", name="ck_services_escalation_freq"),
+        Index("ix_services_scenario", "scenario_id"),
+        Index("ix_services_active", "is_active"),
+    )
+
+
+class ScenarioServiceMonth(Base):
+    __tablename__ = "scenario_service_month"
+
+    id = Column(Integer, primary_key=True, index=True)
+    service_id = Column(Integer, ForeignKey("scenario_services.id", ondelete="CASCADE"), nullable=False)
+    year = Column(Integer, nullable=False)
+    month = Column(Integer, nullable=False)
+    expense_amount = Column(Numeric(18, 2), nullable=False, default=0)
+    cash_out = Column(Numeric(18, 2), nullable=False, default=0)
+    tax_amount = Column(Numeric(18, 2), nullable=False, default=0)
+
+    service = relationship("ScenarioService", back_populates="months", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("service_id", "year", "month", name="uix_service_month_unique"),
+        Index("ix_service_month_sid", "service_id"),
+        Index("ix_service_month_ym", "year", "month"),
     )
 
 

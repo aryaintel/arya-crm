@@ -5,7 +5,7 @@ Workflow & BOQ şemasını güvenle yükseltir.
 - scenarios tablosu yoksa minimum şemayla oluşturur
   (models ile uyumlu: business_case_id, name, months, start_date).
 - scenarios tablosunda workflow kolonları yoksa ekler:
-    is_boq_ready, is_twc_ready, is_capex_ready  (BOOLEAN/INTEGER DEFAULT 0)
+    is_boq_ready, is_twc_ready, is_capex_ready, **is_services_ready** (BOOLEAN/INTEGER DEFAULT 0)
     workflow_state TEXT DEFAULT 'draft'
 - scenario_boq_items tablosu yoksa TAM şemayla oluşturur
   (SQLite: ENUM yerine CHECK'li TEXT).
@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS scenarios (
     is_boq_ready INTEGER NOT NULL DEFAULT 0,
     is_twc_ready INTEGER NOT NULL DEFAULT 0,
     is_capex_ready INTEGER NOT NULL DEFAULT 0,
+    is_services_ready INTEGER NOT NULL DEFAULT 0,
     workflow_state TEXT NOT NULL DEFAULT 'draft'
 );
 """
@@ -91,10 +92,11 @@ CREATE TABLE IF NOT EXISTS scenario_boq_items (
 """
 
 ADD_COLS_SCENARIOS = {
-    "is_boq_ready":     "ALTER TABLE scenarios ADD COLUMN is_boq_ready INTEGER NOT NULL DEFAULT 0;",
-    "is_twc_ready":     "ALTER TABLE scenarios ADD COLUMN is_twc_ready INTEGER NOT NULL DEFAULT 0;",
-    "is_capex_ready":   "ALTER TABLE scenarios ADD COLUMN is_capex_ready INTEGER NOT NULL DEFAULT 0;",
-    "workflow_state":   "ALTER TABLE scenarios ADD COLUMN workflow_state TEXT NOT NULL DEFAULT 'draft';",
+    "is_boq_ready":       "ALTER TABLE scenarios ADD COLUMN is_boq_ready INTEGER NOT NULL DEFAULT 0;",
+    "is_twc_ready":       "ALTER TABLE scenarios ADD COLUMN is_twc_ready INTEGER NOT NULL DEFAULT 0;",
+    "is_capex_ready":     "ALTER TABLE scenarios ADD COLUMN is_capex_ready INTEGER NOT NULL DEFAULT 0;",
+    "is_services_ready":  "ALTER TABLE scenarios ADD COLUMN is_services_ready INTEGER NOT NULL DEFAULT 0;",
+    "workflow_state":     "ALTER TABLE scenarios ADD COLUMN workflow_state TEXT NOT NULL DEFAULT 'draft';",
 }
 
 ADD_COLS_BOQ = {
@@ -114,10 +116,11 @@ ADD_COLS_BOQ = {
 }
 
 BACKFILL_SCENARIOS = [
-    "UPDATE scenarios SET is_boq_ready = COALESCE(is_boq_ready, 0);",
-    "UPDATE scenarios SET is_twc_ready = COALESCE(is_twc_ready, 0);",
-    "UPDATE scenarios SET is_capex_ready = COALESCE(is_capex_ready, 0);",
-    "UPDATE scenarios SET workflow_state = COALESCE(workflow_state, 'draft');",
+    "UPDATE scenarios SET is_boq_ready      = COALESCE(is_boq_ready, 0);",
+    "UPDATE scenarios SET is_twc_ready      = COALESCE(is_twc_ready, 0);",
+    "UPDATE scenarios SET is_capex_ready    = COALESCE(is_capex_ready, 0);",
+    "UPDATE scenarios SET is_services_ready = COALESCE(is_services_ready, 0);",
+    "UPDATE scenarios SET workflow_state    = COALESCE(workflow_state, 'draft');",
 ]
 
 BACKFILL_BOQ = [
@@ -192,7 +195,7 @@ def main() -> None:
     for row in cx.execute("PRAGMA table_info(scenario_boq_items);"):
         print(f"- {row[1]:18} | {row[2]:12} | notnull={row[3]} | default={row[4]!r} | pk={row[5]}")
 
-    print("\n[✓] Workflow & BOQ schema ready.")
+    print("\n[✓] Workflow & BOQ schema ready (services flag included).")
     cx.close()
 
 if __name__ == "__main__":
