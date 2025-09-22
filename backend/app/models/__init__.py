@@ -118,7 +118,8 @@ class Account(Base):
     ownership = Column(String(20), nullable=True)  # Public | Private | Other
     description = Column(Text, nullable=True)
 
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
+    # FK ondelete=SET NULL ise nullable=True olmalı
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     owner = relationship("User", lazy="selectin")
@@ -130,7 +131,8 @@ class Contact(Base):
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
 
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    owner_id   = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
+    # FK ondelete=SET NULL ise nullable=True olmalı
+    owner_id   = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     name  = Column(String, nullable=False)
     email = Column(String, nullable=True)
@@ -156,7 +158,8 @@ class Lead(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    owner_id  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
+    # FK ondelete=SET NULL ise nullable=True olmalı
+    owner_id  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     # Profil
     name    = Column(String, nullable=False)
@@ -198,7 +201,8 @@ class Pipeline(Base):
 class Stage(Base):
     __tablename__ = "stages"
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
+    # DÜZELTME: tenant_id → tenants.id
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     pipeline_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String, nullable=False)
@@ -213,12 +217,14 @@ class Opportunity(Base):
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
+    # FK ondelete=SET NULL ise nullable=True olmalı
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
 
     name = Column(String, nullable=False)
     amount = Column(Integer, nullable=True)
     currency = Column(String, nullable=True)
-    stage_id = Column(Integer, ForeignKey("stages.id", ondelete="SET NULL"), nullable=False)
+    # FK ondelete=SET NULL ise nullable=True olmalı
+    stage_id = Column(Integer, ForeignKey("stages.id", ondelete="SET NULL"), nullable=True)
 
     expected_close_date = Column(Date, nullable=True)
     source = Column(String, nullable=True)

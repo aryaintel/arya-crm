@@ -1,11 +1,12 @@
 # backend/app/api/scenario_twc.py
 from typing import Optional
+from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status, Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, conint, confloat
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
-from ..models import Scenario, ScenarioTWC
+from ..models import Scenario, ScenarioTWC, ScenarioOverhead
 from .deps import get_db, get_current_user  # mevcut auth/db bağımlılığı
 
 router = APIRouter(
@@ -17,19 +18,22 @@ router = APIRouter(
 # Schemas (Excel i.WC paraleli)
 # =========================
 class TWCIn(BaseModel):
-    dso_days: int = Field(45, ge=0, le=365, description="Days Sales Outstanding")
-    dpo_days: int = Field(30, ge=0, le=365, description="Days Payables Outstanding")
-    inventory_days: Optional[int] = Field(None, ge=0, le=365, description="Days Inventory (opsiyonel)")
+    dso_days: conint(ge=0, le=720) = Field(45, description="Days Sales Outstanding")
+    dpo_days: conint(ge=0, le=720) = Field(30, description="Days Payables Outstanding")
+    inventory_days: Optional[conint(ge=0, le=720)] = Field(
+        None, description="Days Inventory (opsiyonel)"
+    )
     notes: Optional[str] = None
 
+    # ek parametreler (Excel i.WC extras)
+    freight_pct_of_sales: Optional[confloat(ge=0, le=1)] = None
+    safety_stock_pct_cogs: Optional[confloat(ge=0, le=1)] = None
+    other_wc_fixed: Optional[confloat(ge=0)] = None  # absolute amount
 
-class TWCOut(BaseModel):
+
+class TWCOut(TWCIn):
     id: int
     scenario_id: int
-    dso_days: int
-    dpo_days: int
-    inventory_days: Optional[int]
-    notes: Optional[str]
 
     class Config:
         orm_mode = True
@@ -50,6 +54,37 @@ def _get_or_none(db: Session, scenario_id: int) -> Optional[ScenarioTWC]:
     return db.execute(stmt).scalars().first()
 
 
+def _get_overheads(db: Session, scenario_id: int) -> dict:
+    rows = (
+        db.query(ScenarioOverhead)
+        .filter(ScenarioOverhead.scenario_id == scenario_id)
+        .all()
+    )
+    return {r.name: r for r in rows if r.name}
+
+
+def _ensure_overhead(db: Session, scenario_id: int, key: str) -> ScenarioOverhead:
+    row = (
+        db.query(ScenarioOverhead)
+        .filter(
+            ScenarioOverhead.scenario_id == scenario_id,
+            ScenarioOverhead.name == key,
+        )
+        .first()
+    )
+    if row:
+        return row
+    row = ScenarioOverhead(
+        scenario_id=scenario_id,
+        name=key,
+        type="fixed",
+        amount=0.0,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
 # =========================
 # Routes
 # =========================
@@ -66,9 +101,28 @@ def get_twc(
     _ensure_scenario(db, scenario_id)
     row = _get_or_none(db, scenario_id)
     if not row:
-        # TWC kaydı henüz yoksa 404 dön (CAPEX list yaklaşımıyla tutarlı)
-        raise HTTPException(status_code=404, detail="TWC settings not found for this scenario")
-    return row
+        raise HTTPException(
+            status_code=404, detail="TWC settings not found for this scenario"
+        )
+
+    overheads = _get_overheads(db, scenario_id)
+    return TWCOut(
+        id=row.id,
+        scenario_id=row.scenario_id,
+        dso_days=row.dso_days,
+        dpo_days=row.dpo_days,
+        inventory_days=row.inventory_days,
+        notes=row.notes,
+        freight_pct_of_sales=float(overheads.get("freight_pct_of_sales").amount)
+        if overheads.get("freight_pct_of_sales")
+        else 0.0,
+        safety_stock_pct_cogs=float(overheads.get("safety_stock_pct_cogs").amount)
+        if overheads.get("safety_stock_pct_cogs")
+        else 0.0,
+        other_wc_fixed=float(overheads.get("other_wc_fixed").amount)
+        if overheads.get("other_wc_fixed")
+        else 0.0,
+    )
 
 
 @router.put(
@@ -86,7 +140,6 @@ def upsert_twc(
 
     row = _get_or_none(db, scenario_id)
     if row is None:
-        # create (ilk kez kayıt)
         row = ScenarioTWC(
             scenario_id=scenario_id,
             dso_days=payload.dso_days,
@@ -96,11 +149,20 @@ def upsert_twc(
         )
         db.add(row)
     else:
-        # update
-        for k, v in payload.dict().items():
+        for k, v in payload.dict(
+            exclude={"freight_pct_of_sales", "safety_stock_pct_cogs", "other_wc_fixed"}
+        ).items():
             setattr(row, k, v)
         db.add(row)
 
+    # overhead extras
+    for field_name in ("freight_pct_of_sales", "safety_stock_pct_cogs", "other_wc_fixed"):
+        val = getattr(payload, field_name)
+        if val is not None:
+            oh = _ensure_overhead(db, scenario_id, field_name)
+            oh.amount = float(val)
+
     db.commit()
     db.refresh(row)
-    return row
+
+    return get_twc(scenario_id=scenario_id, db=db, _user=_user)

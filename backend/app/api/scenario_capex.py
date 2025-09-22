@@ -4,7 +4,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+from sqlalchemy import select
 
 from ..models import Scenario, ScenarioCapex
 from .deps import get_db, get_current_user  # auth token kontrolü (mevcut projedeki bağımlılık)
@@ -27,7 +27,7 @@ class CapexIn(BaseModel):
     # Zaman & tutar (zorunlu)
     year: int = Field(..., ge=1900, le=3000)
     month: int = Field(..., ge=1, le=12)
-    amount: Decimal = Field(...)
+    amount: Decimal = Field(..., ge=0)
 
     # Açıklama
     notes: Optional[str] = None
@@ -52,6 +52,7 @@ class CapexIn(BaseModel):
     contingency_pct: Optional[Decimal] = Field(0, ge=0, le=100)
     partial_month_policy: Optional[str] = Field("full_month")
 
+    # ---- validators ----
     @validator("depr_method")
     def _depr_ok(cls, v: Optional[str]) -> Optional[str]:
         if v and v not in DEPR_ALLOWED:
@@ -63,6 +64,23 @@ class CapexIn(BaseModel):
         if v and v not in PARTIAL_MONTH_POLICY:
             raise ValueError(f"partial_month_policy must be one of {sorted(PARTIAL_MONTH_POLICY)}")
         return v
+
+    # Yalnızca para/oran alanlarını güvenle Decimal'e çevir
+    @validator(
+        "amount",
+        "salvage_value",
+        "disposal_proceeds",
+        "per_unit_cost",
+        "contingency_pct",
+        pre=True,
+    )
+    def _coerce_decimal(cls, v):
+        if v is None:
+            return v
+        try:
+            return Decimal(str(v))
+        except Exception:
+            return v
 
 
 class CapexOut(BaseModel):
@@ -109,6 +127,19 @@ def _ensure_scenario(db: Session, scenario_id: int) -> Scenario:
     return sc
 
 
+def _materialize_amount(payload: CapexIn) -> Decimal:
+    """
+    Eğer per_unit_cost ve quantity doluysa, amount'ı onlardan türet.
+    Excel'de sık yapılan bir kullanım; mevcut amount'u override eder.
+    """
+    if payload.per_unit_cost is not None and payload.quantity is not None:
+        try:
+            return (Decimal(str(payload.per_unit_cost)) * Decimal(str(payload.quantity))).quantize(Decimal("0.01"))
+        except Exception:
+            pass
+    return Decimal(str(payload.amount))
+
+
 # =========================
 # Routes
 # =========================
@@ -119,18 +150,37 @@ def _ensure_scenario(db: Session, scenario_id: int) -> Scenario:
 )
 def list_capex(
     scenario_id: int = Path(..., ge=1),
-    only_active: bool = Query(False),
+    only_active: bool = Query(False, description="Only active rows"),
     year: Optional[int] = Query(None, ge=1900, le=3000),
+    year_from: Optional[int] = Query(None, ge=1900, le=3000),
+    year_to: Optional[int] = Query(None, ge=1900, le=3000),
+    category: Optional[str] = Query(None, description="Filter by category"),
+    limit: Optional[int] = Query(None, ge=1, le=1000),
+    offset: Optional[int] = Query(None, ge=0),
     db: Session = Depends(get_db),
     _user=Depends(get_current_user),
 ):
     _ensure_scenario(db, scenario_id)
     stmt = select(ScenarioCapex).where(ScenarioCapex.scenario_id == scenario_id)
+
     if only_active:
         stmt = stmt.where(ScenarioCapex.is_active.is_(True))
     if year is not None:
         stmt = stmt.where(ScenarioCapex.year == year)
+    if year_from is not None:
+        stmt = stmt.where(ScenarioCapex.year >= year_from)
+    if year_to is not None:
+        stmt = stmt.where(ScenarioCapex.year <= year_to)
+    if category:
+        stmt = stmt.where(ScenarioCapex.category == category)
+
     stmt = stmt.order_by(ScenarioCapex.year.asc(), ScenarioCapex.month.asc(), ScenarioCapex.id.asc())
+
+    if offset is not None:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+
     rows = db.execute(stmt).scalars().all()
     return rows
 
@@ -152,7 +202,7 @@ def create_capex(
         scenario_id=scenario_id,
         year=payload.year,
         month=payload.month,
-        amount=payload.amount,
+        amount=_materialize_amount(payload),
         notes=payload.notes,
         asset_name=payload.asset_name,
         category=payload.category,
@@ -193,8 +243,14 @@ def update_capex(
     row = db.get(ScenarioCapex, item_id)
     if not row or row.scenario_id != scenario_id:
         raise HTTPException(status_code=404, detail="CAPEX item not found")
-    for k, v in payload.dict().items():
+
+    # amount tekrar türetilebilir
+    data = payload.dict()
+    data["amount"] = _materialize_amount(payload)
+
+    for k, v in data.items():
         setattr(row, k, v)
+
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -241,7 +297,7 @@ def bulk_insert_capex(
                 scenario_id=scenario_id,
                 year=item.year,
                 month=item.month,
-                amount=item.amount,
+                amount=_materialize_amount(item),
                 notes=item.notes,
                 asset_name=item.asset_name,
                 category=item.category,

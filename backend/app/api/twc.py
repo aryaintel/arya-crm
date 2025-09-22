@@ -1,8 +1,8 @@
 # backend/app/api/twc.py
 from __future__ import annotations
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Iterable, Tuple
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
@@ -13,7 +13,7 @@ from ..models import (
     ScenarioProduct,
     ScenarioProductMonth,
     ScenarioBOQItem,
-    ScenarioTWC,  # ← yeni tablo (dso/dpo/dio burada)
+    ScenarioTWC,  # dso/dpo/dio burada
 )
 from .deps import get_db, get_current_user
 
@@ -25,18 +25,16 @@ router = APIRouter(
 # ======================================================
 # TWC Assumption Anahtarları (legacy - scenario_overheads.name)
 # ======================================================
-# DSO/DPO/DIO artık scenario_twc tablosunda saklanıyor.
-# Aşağıdaki anahtarlar geriye uyumluluk ve ek parametreler için tutuluyor.
+# DSO/DPO/DIO scenario_twc tablosunda. Ek parametreler overheads'te tutulur.
 TWC_KEYS = {
-    # Günler (legacy anahtar isimleri – UI sözleşmesi değişmesin)
-    "twc_dso_days",      # Days Sales Outstanding (alacak)
-    "twc_dpo_days",      # Days Payables Outstanding (borç)
-    "twc_dio_days",      # Days Inventory Outstanding (stok)
-
-    # Ek parametreler (şimdilik overheads'te)
-    "twc_freight_pct_of_sales",   # Satışın yüzdesi olarak navlun (opsiyonel)
-    "twc_safety_stock_pct_cogs",  # COGS'un yüzdesi olarak emniyet stoğu (opsiyonel)
-    "twc_other_wc_fixed",         # Sabit ek işletme sermayesi (para tutarı)
+    # core günler (legacy anahtar isimleri – geriye uyumluluk için tutulur)
+    "twc_dso_days",
+    "twc_dpo_days",
+    "twc_dio_days",
+    # ek parametreler
+    "twc_freight_pct_of_sales",
+    "twc_safety_stock_pct_cogs",
+    "twc_other_wc_fixed",
 }
 
 # scenario_twc alan eşlemesi (UI alan adı -> tablo kolonu)
@@ -45,12 +43,6 @@ MAP_TWC_COL = {
     "twc_dpo_days": "dpo_days",
     "twc_dio_days": "inventory_days",
 }
-
-def _ensure_scenario(db: Session, scenario_id: int) -> Scenario:
-    sc = db.get(Scenario, scenario_id)
-    if not sc:
-        raise HTTPException(status_code=404, detail="Scenario not found")
-    return sc
 
 
 # =========================
@@ -75,8 +67,13 @@ class TWCIn(BaseModel):
             return v
         return Decimal(str(v))
 
+
 class TWCOut(TWCIn):
     scenario_id: int
+
+    class Config:
+        orm_mode = True
+
 
 class TWCBucket(BaseModel):
     year: int
@@ -89,6 +86,7 @@ class TWCBucket(BaseModel):
     inv: Decimal  # Inventory
     nwc: Decimal  # Net Working Capital (= AR + INV - AP)
 
+
 class TWCPreview(BaseModel):
     scenario_id: int
     assumptions: TWCOut
@@ -99,6 +97,13 @@ class TWCPreview(BaseModel):
 # =========================
 # Internal helpers
 # =========================
+def _ensure_scenario(db: Session, scenario_id: int) -> Scenario:
+    sc = db.get(Scenario, scenario_id)
+    if not sc:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return sc
+
+
 def _load_overhead_twcs(db: Session, scenario_id: int) -> Dict[str, Decimal]:
     """scenario_overheads tablosundan TWC anahtarlarını oku (fixed)."""
     stmt = (
@@ -116,6 +121,7 @@ def _load_overhead_twcs(db: Session, scenario_id: int) -> Dict[str, Decimal]:
             except Exception:
                 pass
     return out
+
 
 def _upsert_overhead_fixed(db: Session, scenario_id: int, key: str, value: Optional[Decimal]) -> None:
     """ScenarioOverhead'te (fixed) tek satır upsert et (yalnız ek parametreler için)."""
@@ -139,7 +145,8 @@ def _upsert_overhead_fixed(db: Session, scenario_id: int, key: str, value: Optio
         row.amount = value
         db.add(row)
 
-def _iter_months(db: Session, scenario_id: int):
+
+def _iter_months(db: Session, scenario_id: int) -> Iterable[Tuple[int, int]]:
     """Ürün aylıkları üzerinden (yıl, ay) kombinasyonlarını sırayla döndür."""
     stmt = (
         select(ScenarioProductMonth.year, ScenarioProductMonth.month)
@@ -149,6 +156,7 @@ def _iter_months(db: Session, scenario_id: int):
         .order_by(ScenarioProductMonth.year.asc(), ScenarioProductMonth.month.asc())
     )
     return db.execute(stmt).all()
+
 
 def _monthly_revenue_cogs(db: Session, scenario_id: int) -> Dict[tuple, Dict[str, Decimal]]:
     """
@@ -160,8 +168,8 @@ def _monthly_revenue_cogs(db: Session, scenario_id: int) -> Dict[tuple, Dict[str
         select(
             ScenarioProductMonth.year,
             ScenarioProductMonth.month,
-            func.sum(ScenarioProductMonth.quantity * ScenarioProduct.price).label("rev"),
-            func.sum(ScenarioProductMonth.quantity * ScenarioProduct.unit_cogs).label("cogs"),
+            func.sum((ScenarioProductMonth.quantity or 0) * (ScenarioProduct.price or 0)).label("rev"),
+            func.sum((ScenarioProductMonth.quantity or 0) * (ScenarioProduct.unit_cogs or 0)).label("cogs"),
         )
         .join(ScenarioProduct, ScenarioProductMonth.scenario_product_id == ScenarioProduct.id)
         .where(ScenarioProduct.scenario_id == scenario_id)
@@ -175,6 +183,7 @@ def _monthly_revenue_cogs(db: Session, scenario_id: int) -> Dict[tuple, Dict[str
             "cogs": Decimal(str(cgs or 0)),
         }
     return out
+
 
 def _monthly_freight_from_boq(db: Session, scenario_id: int) -> Dict[tuple, Decimal]:
     """
@@ -198,7 +207,7 @@ def _monthly_freight_from_boq(db: Session, scenario_id: int) -> Dict[tuple, Deci
                 agg[key] = agg.get(key, Decimal("0")) + total
         elif freq == "monthly":
             if r.start_year and r.start_month and r.months:
-                month_cnt = int(r.months)
+                month_cnt = int(r.months or 0)
                 per = (total / Decimal(month_cnt)) if month_cnt > 0 else Decimal("0")
                 y, m = int(r.start_year), int(r.start_month)
                 for _ in range(month_cnt):
@@ -209,14 +218,17 @@ def _monthly_freight_from_boq(db: Session, scenario_id: int) -> Dict[tuple, Deci
                         m = 1
                         y += 1
         else:
+            # diğer frekanslar şu an yok sayılıyor
             pass
 
     return agg
+
 
 # ---- scenario_twc helpers ----
 def _get_scenario_twc(db: Session, scenario_id: int) -> Optional[ScenarioTWC]:
     stmt = select(ScenarioTWC).where(ScenarioTWC.scenario_id == scenario_id)
     return db.execute(stmt).scalars().first()
+
 
 def _ensure_scenario_twc(db: Session, scenario_id: int) -> ScenarioTWC:
     """Yoksa overhead değerlerinden migrate ederek scenario_twc kaydı oluşturur."""
@@ -224,7 +236,7 @@ def _ensure_scenario_twc(db: Session, scenario_id: int) -> ScenarioTWC:
     if row:
         return row
 
-    # Migrate from overhead defaults
+    # overhead defaults
     oh = _load_overhead_twcs(db, scenario_id)
     dso = Decimal(str(oh.get("twc_dso_days", 45)))
     dpo = Decimal(str(oh.get("twc_dpo_days", 30)))
@@ -268,9 +280,9 @@ def get_twc(
     defaults = TWCIn().dict()
 
     # core (tablodan)
-    merged["twc_dso_days"] = Decimal(str(twc_row.dso_days or defaults["twc_dso_days"]))
-    merged["twc_dpo_days"] = Decimal(str(twc_row.dpo_days or defaults["twc_dpo_days"]))
-    merged["twc_dio_days"] = Decimal(str((twc_row.inventory_days if twc_row.inventory_days is not None else defaults["twc_dio_days"])))
+    merged["twc_dso_days"] = Decimal(str(twc_row.dso_days if twc_row.dso_days is not None else defaults["twc_dso_days"]))
+    merged["twc_dpo_days"] = Decimal(str(twc_row.dpo_days if twc_row.dpo_days is not None else defaults["twc_dpo_days"]))
+    merged["twc_dio_days"] = Decimal(str(twc_row.inventory_days if twc_row.inventory_days is not None else defaults["twc_dio_days"]))
 
     # extras (overheads)
     for k in ("twc_freight_pct_of_sales", "twc_safety_stock_pct_cogs", "twc_other_wc_fixed"):
@@ -297,7 +309,6 @@ def upsert_twc(
     if row is None:
         row = ScenarioTWC(scenario_id=scenario_id)
 
-    # UI alanlarından tablo kolonlarına yaz
     data = payload.dict()
     if data.get("twc_dso_days") is not None:
         row.dso_days = int(Decimal(str(data["twc_dso_days"])))
@@ -330,8 +341,9 @@ def preview_twc(
     _user=Depends(get_current_user),
 ):
     sc = _ensure_scenario(db, scenario_id)
+
     # Assumptions
-    twc_rows = get_twc(scenario_id, db, _user)  # reuse
+    twc_rows = get_twc(scenario_id, db, _user)  # reuse birleşik görünüm
     asum: Dict[str, Decimal] = {k: Decimal(str(v)) for k, v in twc_rows.dict().items() if k in TWC_KEYS}
 
     dso = asum.get("twc_dso_days", Decimal("45"))
