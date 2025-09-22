@@ -361,27 +361,27 @@ export default function BOQTable({
         <div className="flex gap-2">
           <button
             onClick={load}
-            className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
             disabled={loading}
           >
             Refresh
           </button>
           <button
             onClick={startAdd}
-            className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
           >
             + Add BOQ Item
           </button>
           <button
             onClick={() => setShowPreview((v) => !v)}
-            className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200"
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed"
             title="Aylık simülasyon (Revenue/COGS/GM)"
           >
             {showPreview ? "Hide Preview" : "Show Preview"}
           </button>
           <button
             onClick={markReady}
-            className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
           >
             Mark BOQ Ready → TWC
           </button>
@@ -558,13 +558,13 @@ export default function BOQTable({
                   <div className="flex gap-2">
                     <button
                       onClick={saveNew}
-                      className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                      className="px-2 py-1 rounded border hover:bg-gray-50 text-sm"
                     >
                       Save
                     </button>
                     <button
                       onClick={cancelAdd}
-                      className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300"
+                      className="px-2 py-1 rounded border hover:bg-gray-50 text-sm"
                     >
                       Cancel
                     </button>
@@ -779,13 +779,13 @@ export default function BOQTable({
                     <div className="flex gap-2">
                       <button
                         onClick={() => saveEdit(r)}
-                        className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                        className="px-2 py-1 rounded border hover:bg-gray-50 text-sm"
                       >
                         Save
                       </button>
                       <button
                         onClick={() => delRow(r)}
-                        className="px-3 py-1 rounded bg-rose-600 text-white hover:bg-rose-700"
+                        className="px-2 py-1 rounded border hover:bg-gray-50 text-sm"
                       >
                         Delete
                       </button>
@@ -827,3 +827,4 @@ export default function BOQTable({
     </div>
   );
 }
+

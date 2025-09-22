@@ -52,23 +52,18 @@ class ScenarioTWC(Base):
     __tablename__ = "scenario_twc"
 
     id = Column(Integer, primary_key=True, index=True)
-    # Her senaryoda tek satır olacak (1:1) → unique constraint
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    # i.WC (Excel) ile aynı alanlar
     dso_days = Column(Integer, nullable=False, default=45)   # 0..365
     dpo_days = Column(Integer, nullable=False, default=30)   # 0..365
     inventory_days = Column(Integer, nullable=True)          # NULL | 0..365
     notes = Column(Text, nullable=True)
 
-    # 1:1 ilişki
     scenario = relationship("Scenario", back_populates="twc", lazy="selectin")
 
     __table_args__ = (
-        # Her scenario için tek satır
         UniqueConstraint("scenario_id", name="uix_twc_scenario_unique"),
         Index("ix_twc_scenario", "scenario_id"),
-        # Basit aralık kontrolleri
         CheckConstraint("dso_days >= 0 AND dso_days <= 365", name="ck_twc_dso_days"),
         CheckConstraint("dpo_days >= 0 AND dpo_days <= 365", name="ck_twc_dpo_days"),
         CheckConstraint(
@@ -110,7 +105,6 @@ class Account(Base):
     billing_address = Column(Text, nullable=True)
     shipping_address = Column(Text, nullable=True)
 
-    # Opsiyonel alanlar (Salesforce benzeri)
     account_number = Column(String(50), nullable=True)
     employees = Column(Integer, nullable=True)
     annual_revenue = Column(Integer, nullable=True)
@@ -118,8 +112,7 @@ class Account(Base):
     ownership = Column(String(20), nullable=True)  # Public | Private | Other
     description = Column(Text, nullable=True)
 
-    # FK ondelete=SET NULL ise nullable=True olmalı
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
     owner = relationship("User", lazy="selectin")
@@ -131,8 +124,7 @@ class Contact(Base):
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
 
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    # FK ondelete=SET NULL ise nullable=True olmalı
-    owner_id   = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    owner_id   = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
 
     name  = Column(String, nullable=False)
     email = Column(String, nullable=True)
@@ -158,8 +150,7 @@ class Lead(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    # FK ondelete=SET NULL ise nullable=True olmalı
-    owner_id  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    owner_id  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
 
     # Profil
     name    = Column(String, nullable=False)
@@ -201,8 +192,7 @@ class Pipeline(Base):
 class Stage(Base):
     __tablename__ = "stages"
     id = Column(Integer, primary_key=True, index=True)
-    # DÜZELTME: tenant_id → tenants.id
-    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
+    tenant_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
     pipeline_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String, nullable=False)
@@ -217,14 +207,12 @@ class Opportunity(Base):
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     account_id = Column(Integer, ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
-    # FK ondelete=SET NULL ise nullable=True olmalı
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
 
     name = Column(String, nullable=False)
     amount = Column(Integer, nullable=True)
     currency = Column(String, nullable=True)
-    # FK ondelete=SET NULL ise nullable=True olmalı
-    stage_id = Column(Integer, ForeignKey("stages.id", ondelete="SET NULL"), nullable=True)
+    stage_id = Column(Integer, ForeignKey("stages.id", ondelete="SET NULL"), nullable=False)
 
     expected_close_date = Column(Date, nullable=True)
     source = Column(String, nullable=True)
@@ -235,7 +223,6 @@ class Opportunity(Base):
     account = relationship("Account", lazy="selectin")
     owner   = relationship("User", lazy="selectin")
 
-    # 1:1 BusinessCase ilişkisi
     business_case = relationship("BusinessCase", uselist=False, back_populates="opportunity", lazy="selectin")
 
 
@@ -268,21 +255,21 @@ class Scenario(Base):
     is_boq_ready       = Column(Boolean, nullable=False, default=False, server_default="0")
     is_twc_ready       = Column(Boolean, nullable=False, default=False, server_default="0")
     is_capex_ready     = Column(Boolean, nullable=False, default=False, server_default="0")
-    is_services_ready  = Column(Boolean, nullable=False, default=False, server_default="0")  # <-- NEW
+    is_services_ready  = Column(Boolean, nullable=False, default=False, server_default="0")
     workflow_state     = Column(String,  nullable=False, default="draft", server_default="draft")
 
     business_case = relationship("BusinessCase", back_populates="scenarios", lazy="selectin")
-    products = relationship("ScenarioProduct", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
-    overheads = relationship("ScenarioOverhead", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
-    boq_items = relationship("ScenarioBOQItem", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
-    capex_items = relationship("ScenarioCapex", backref="scenario", cascade="all, delete-orphan", lazy="selectin")
-    services = relationship("ScenarioService", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
-    # NEW: 1:1 TWC ilişkisi
-    twc = relationship("ScenarioTWC", uselist=False, back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    products   = relationship("ScenarioProduct", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    overheads  = relationship("ScenarioOverhead", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    boq_items  = relationship("ScenarioBOQItem", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    capex_items= relationship("ScenarioCapex", backref="scenario", cascade="all, delete-orphan", lazy="selectin")
+    services   = relationship("ScenarioService", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    # 1:1 TWC
+    twc        = relationship("ScenarioTWC", uselist=False, back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    # 1:N TAX RULES  ← YENİ
+    taxes      = relationship("ScenarioTaxRule", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
 
-    __table_args__ = (
-        Index("ix_scenarios_bc", "business_case_id"),
-    )
+    __table_args__ = (Index("ix_scenarios_bc", "business_case_id"),)
 
 
 # =========================
@@ -332,7 +319,6 @@ class ScenarioCapex(Base):
     id = Column(Integer, primary_key=True, index=True)
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    # Zaman & Tutar
     year = Column(Integer, nullable=False)
     month = Column(Integer, nullable=False)  # 1..12
     amount = Column(Numeric(18, 2), nullable=False, default=0)
@@ -383,13 +369,11 @@ class ScenarioBOQItem(Base):
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
     notes = Column(Text, nullable=True)
 
-    # Script ile birebir uyumlu: TEXT + CHECK
     category = Column(String, nullable=True)
 
     scenario = relationship("Scenario", back_populates="boq_items", lazy="selectin")
 
     __table_args__ = (
-        # SQLite CHECK: NULL değerler CHECK'e takılmaz; script'teki davranışla aynı
         CheckConstraint(
             "category IN ('bulk_with_freight','bulk_ex_freight','freight')",
             name="ck_boq_category",
@@ -476,6 +460,74 @@ class ScenarioServiceMonth(Base):
         UniqueConstraint("service_id", "year", "month", name="uix_service_month_unique"),
         Index("ix_service_month_sid", "service_id"),
         Index("ix_service_month_ym", "year", "month"),
+    )
+
+
+# =========================
+# NEW: Scenario FX Rates
+# =========================
+class ScenarioFXRate(Base):
+    __tablename__ = "scenario_fx_rates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
+
+    currency = Column(String(3), nullable=False)  # ISO-4217, örn: USD, EUR
+    rate_to_base = Column(Numeric(18, 6), nullable=False, default=1)  # Base currency’e oran
+
+    start_year = Column(Integer, nullable=False)
+    start_month = Column(Integer, nullable=False)  # 1..12
+    end_year = Column(Integer, nullable=True)
+    end_month = Column(Integer, nullable=True)
+
+    source = Column(String(50), nullable=True)  # manual | cbrt | ecb | oanda ...
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+
+    scenario = relationship("Scenario", lazy="selectin")
+
+    __table_args__ = (
+        CheckConstraint("start_month >= 1 AND start_month <= 12", name="ck_fx_start_month"),
+        CheckConstraint("(end_month IS NULL) OR (end_month >= 1 AND end_month <= 12)", name="ck_fx_end_month"),
+        UniqueConstraint("scenario_id", "currency", "start_year", "start_month", name="uix_fx_period_unique"),
+        Index("ix_fx_scenario", "scenario_id"),
+        Index("ix_fx_currency", "currency"),
+    )
+
+
+# =========================
+# NEW: Scenario Tax Rules
+# =========================
+class ScenarioTaxRule(Base):
+    __tablename__ = "scenario_tax_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
+
+    name = Column(String(100), nullable=False)  # örn: KDV, Stopaj, Kurumlar Vergisi
+    tax_type = Column(String(20), nullable=False, default="custom")  # vat|withholding|corp|custom
+    applies_to = Column(String(20), nullable=False, default="all")   # revenue|services|capex|profit|all
+
+    rate_pct = Column(Numeric(8, 4), nullable=False, default=0)  # yüzde
+    start_year = Column(Integer, nullable=False)
+    start_month = Column(Integer, nullable=False)
+    end_year = Column(Integer, nullable=True)
+    end_month = Column(Integer, nullable=True)
+
+    is_inclusive = Column(Boolean, nullable=False, default=False, server_default="0")  # fiyatlara dahil mi
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+
+    # ← back_populates ile Scenario.taxes’e bağladık
+    scenario = relationship("Scenario", back_populates="taxes", lazy="selectin")
+
+    __table_args__ = (
+        CheckConstraint("tax_type IN ('vat','withholding','corp','custom')", name="ck_tax_type"),
+        CheckConstraint("applies_to IN ('revenue','services','capex','profit','all')", name="ck_tax_applies_to"),
+        CheckConstraint("start_month >= 1 AND start_month <= 12", name="ck_tax_start_month"),
+        CheckConstraint("(end_month IS NULL) OR (end_month >= 1 AND end_month <= 12)", name="ck_tax_end_month"),
+        Index("ix_tax_scenario", "scenario_id"),
+        Index("ix_tax_active", "is_active"),
     )
 
 

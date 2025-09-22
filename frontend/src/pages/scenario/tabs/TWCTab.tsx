@@ -160,22 +160,28 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-lg">TWC Assumptions</h3>
         <div className="flex gap-2">
-          <button onClick={load} className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200">
+          <button
+            onClick={load}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
             Refresh
           </button>
           <button
             onClick={save}
             disabled={saving}
-            className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500 disabled:opacity-50"
           >
             Save
           </button>
-          <button onClick={preview} className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200">
+          <button
+            onClick={preview}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
             Preview NWC
           </button>
           <button
             onClick={markReady}
-            className="px-3 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
           >
             Mark TWC Ready → CAPEX
           </button>

@@ -17,27 +17,27 @@ export type ServiceRow = {
   unit?: string | null;
 
   // Price / quantity
-  quantity: number;
-  unit_cost: number;
+  quantity: number | string;
+  unit_cost: number | string;
   currency: string;
 
   // Timing
-  start_year: number;
-  start_month: number;
-  duration_months?: number | null;
-  end_year?: number | null;
-  end_month?: number | null;
+  start_year: number | string;
+  start_month: number | string;
+  duration_months?: number | null | string;
+  end_year?: number | null | string;
+  end_month?: number | null | string;
 
   // Payment / cash
   payment_term: PaymentTerm;
   cash_out_month_policy: CashOutPolicy;
 
   // Escalation
-  escalation_pct: number;
+  escalation_pct: number | string;
   escalation_freq: EscalationFreq;
 
   // Tax
-  tax_rate: number;
+  tax_rate: number | string;
   expense_includes_tax: boolean;
 
   // Other
@@ -59,6 +59,10 @@ const cashPolicies: CashOutPolicy[] = [
   "contract_anniversary",
 ];
 const escalationFreqs: EscalationFreq[] = ["annual", "none"];
+
+// ortak gri buton stili
+const BTN =
+  "px-3 py-2 rounded-md bg-gray-200 hover:bg-gray-300 border border-gray-300 text-gray-800";
 
 const emptyRow = (year: number, month: number): ServiceRow => ({
   service_name: "",
@@ -82,6 +86,14 @@ const emptyRow = (year: number, month: number): ServiceRow => ({
   notes: "",
   is_active: true,
 });
+
+// "4,5" -> 4.5 güvenli dönüşüm
+function toNum(v: any, fallback = 0): number {
+  if (v === null || typeof v === "undefined") return fallback;
+  const s = String(v).trim().replace(",", ".");
+  const n = Number(s);
+  return Number.isFinite(n) ? n : fallback;
+}
 
 export default function ServicesTable({ scenarioId }: Props) {
   const [rows, setRows] = useState<ServiceRow[]>([]);
@@ -135,16 +147,24 @@ export default function ServicesTable({ scenarioId }: Props) {
     if (!editing) return;
     const payload = {
       ...editing,
-      quantity: Number(editing.quantity ?? 0),
-      unit_cost: Number(editing.unit_cost ?? 0),
-      escalation_pct: Number(editing.escalation_pct ?? 0),
-      tax_rate: Number(editing.tax_rate ?? 0),
-      start_year: Number(editing.start_year ?? now.y),
-      start_month: Number(editing.start_month ?? now.m),
+      quantity: toNum(editing.quantity, 0),
+      unit_cost: toNum(editing.unit_cost, 0),
+      escalation_pct: toNum(editing.escalation_pct, 0),
+      tax_rate: toNum(editing.tax_rate, 0),
+      start_year: toNum(editing.start_year, now.y),
+      start_month: toNum(editing.start_month, now.m),
       duration_months:
-        editing.duration_months == null ? null : Number(editing.duration_months),
-      end_year: editing.end_year == null ? null : Number(editing.end_year),
-      end_month: editing.end_month == null ? null : Number(editing.end_month),
+        editing.duration_months === "" || editing.duration_months == null
+          ? null
+          : toNum(editing.duration_months, 0),
+      end_year:
+        editing.end_year === "" || editing.end_year == null
+          ? null
+          : toNum(editing.end_year, now.y),
+      end_month:
+        editing.end_month === "" || editing.end_month == null
+          ? null
+          : toNum(editing.end_month, now.m),
     };
 
     try {
@@ -189,16 +209,10 @@ export default function ServicesTable({ scenarioId }: Props) {
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-semibold">Services (OPEX)</h3>
         <div className="flex items-center gap-2">
-          <button
-            onClick={openCreate}
-            className="px-3 py-2 rounded-lg border hover:bg-gray-50"
-          >
+          <button onClick={openCreate} className={BTN}>
             + New Service
           </button>
-          <button
-            onClick={reload}
-            className="px-3 py-2 rounded-lg border hover:bg-gray-50"
-          >
+          <button onClick={reload} className={BTN}>
             Refresh
           </button>
         </div>
@@ -245,28 +259,34 @@ export default function ServicesTable({ scenarioId }: Props) {
               </tr>
             ) : (
               rows.map((r) => {
-                const monthly = Number(r.quantity || 0) * Number(r.unit_cost || 0);
+                const monthly = toNum(r.quantity, 0) * toNum(r.unit_cost, 0);
                 return (
                   <tr key={r.id} className="border-t">
                     <td className="p-2">{r.service_name}</td>
                     <td className="p-2">{r.category}</td>
                     <td className="p-2">{r.vendor}</td>
-                    <td className="p-2 text-right">{Number(r.quantity || 0)}</td>
+                    <td className="p-2 text-right">{toNum(r.quantity, 0)}</td>
                     <td className="p-2 text-right">
-                      {Number(r.unit_cost || 0).toLocaleString()}
+                      {toNum(r.unit_cost, 0).toLocaleString(undefined, {
+                        maximumFractionDigits: 2,
+                      })}
                     </td>
                     <td className="p-2">{r.currency}</td>
                     <td className="p-2">
-                      {r.start_year}/{String(r.start_month).padStart(2, "0")}
+                      {toNum(r.start_year, now.y)}/{String(toNum(r.start_month, now.m)).padStart(2, "0")}
                     </td>
-                    <td className="p-2">{r.duration_months ?? "-"}</td>
+                    <td className="p-2">
+                      {r.duration_months == null || r.duration_months === ""
+                        ? "-"
+                        : toNum(r.duration_months, 0)}
+                    </td>
                     <td className="p-2">{r.payment_term}</td>
                     <td className="p-2">
                       {r.escalation_freq === "annual"
-                        ? `${Number(r.escalation_pct || 0)}% (annual)`
+                        ? `${toNum(r.escalation_pct, 0)}% (annual)`
                         : "-"}
                     </td>
-                    <td className="p-2 text-right">{Number(r.tax_rate || 0)}</td>
+                    <td className="p-2 text-right">{toNum(r.tax_rate, 0)}</td>
                     <td className="p-2 text-center">
                       <input
                         type="checkbox"
@@ -279,17 +299,11 @@ export default function ServicesTable({ scenarioId }: Props) {
                         maximumFractionDigits: 2,
                       })}
                     </td>
-                    <td className="p-2 text-right">
-                      <button
-                        className="px-2 py-1 rounded-md border mr-2 hover:bg-gray-50"
-                        onClick={() => openEdit(r)}
-                      >
+                    <td className="p-2 text-right space-x-2">
+                      <button className={BTN} onClick={() => openEdit(r)}>
                         Edit
                       </button>
-                      <button
-                        className="px-2 py-1 rounded-md border hover:bg-red-50 text-red-600"
-                        onClick={() => removeRow(r.id)}
-                      >
+                      <button className={BTN} onClick={() => removeRow(r.id)}>
                         Delete
                       </button>
                     </td>
@@ -309,7 +323,7 @@ export default function ServicesTable({ scenarioId }: Props) {
               <h4 className="text-lg font-semibold">
                 {editing.id ? "Edit Service" : "New Service"}
               </h4>
-              <button className="px-3 py-1 rounded-md border" onClick={closeForm}>
+              <button className={BTN} onClick={closeForm}>
                 Close
               </button>
             </div>
@@ -362,11 +376,11 @@ export default function ServicesTable({ scenarioId }: Props) {
               <div>
                 <label className="text-xs text-gray-600">Quantity</label>
                 <input
-                  type="number"
+                  inputMode="decimal"
                   className="w-full border rounded-md px-2 py-1 text-right"
-                  value={editing.quantity}
+                  value={String(editing.quantity ?? "")}
                   onChange={(e) =>
-                    setEditing((s) => s && { ...s, quantity: Number(e.target.value) })
+                    setEditing((s) => s && { ...s, quantity: e.target.value })
                   }
                 />
               </div>
@@ -374,11 +388,11 @@ export default function ServicesTable({ scenarioId }: Props) {
               <div>
                 <label className="text-xs text-gray-600">Unit Cost</label>
                 <input
-                  type="number"
+                  inputMode="decimal"
                   className="w-full border rounded-md px-2 py-1 text-right"
-                  value={editing.unit_cost}
+                  value={String(editing.unit_cost ?? "")}
                   onChange={(e) =>
-                    setEditing((s) => s && { ...s, unit_cost: Number(e.target.value) })
+                    setEditing((s) => s && { ...s, unit_cost: e.target.value })
                   }
                 />
               </div>
@@ -398,24 +412,24 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <div>
                   <label className="text-xs text-gray-600">Start Year</label>
                   <input
-                    type="number"
+                    inputMode="numeric"
                     className="w-full border rounded-md px-2 py-1"
-                    value={editing.start_year}
+                    value={String(editing.start_year)}
                     onChange={(e) =>
-                      setEditing((s) => s && { ...s, start_year: Number(e.target.value) })
+                      setEditing((s) => s && { ...s, start_year: e.target.value })
                     }
                   />
                 </div>
                 <div>
                   <label className="text-xs text-gray-600">Start Month</label>
                   <input
-                    type="number"
+                    inputMode="numeric"
                     min={1}
                     max={12}
                     className="w-full border rounded-md px-2 py-1"
-                    value={editing.start_month}
+                    value={String(editing.start_month)}
                     onChange={(e) =>
-                      setEditing((s) => s && { ...s, start_month: Number(e.target.value) })
+                      setEditing((s) => s && { ...s, start_month: e.target.value })
                     }
                   />
                 </div>
@@ -424,13 +438,13 @@ export default function ServicesTable({ scenarioId }: Props) {
               <div>
                 <label className="text-xs text-gray-600">Duration (months, optional)</label>
                 <input
-                  type="number"
+                  inputMode="numeric"
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.duration_months ?? ""}
                   onChange={(e) =>
                     setEditing((s) => s && ({
                       ...s,
-                      duration_months: e.target.value === "" ? null : Number(e.target.value),
+                      duration_months: e.target.value === "" ? null : e.target.value,
                     }))
                   }
                 />
@@ -440,13 +454,13 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <div>
                   <label className="text-xs text-gray-600">End Year (optional)</label>
                   <input
-                    type="number"
+                    inputMode="numeric"
                     className="w-full border rounded-md px-2 py-1"
                     value={editing.end_year ?? ""}
                     onChange={(e) =>
                       setEditing((s) => s && ({
                         ...s,
-                        end_year: e.target.value === "" ? null : Number(e.target.value),
+                        end_year: e.target.value === "" ? null : e.target.value,
                       }))
                     }
                   />
@@ -454,7 +468,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <div>
                   <label className="text-xs text-gray-600">End Month (optional)</label>
                   <input
-                    type="number"
+                    inputMode="numeric"
                     min={1}
                     max={12}
                     className="w-full border rounded-md px-2 py-1"
@@ -462,7 +476,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                     onChange={(e) =>
                       setEditing((s) => s && ({
                         ...s,
-                        end_month: e.target.value === "" ? null : Number(e.target.value),
+                        end_month: e.target.value === "" ? null : e.target.value,
                       }))
                     }
                   />
@@ -512,14 +526,14 @@ export default function ServicesTable({ scenarioId }: Props) {
               <div>
                 <label className="text-xs text-gray-600">Escalation % (annual)</label>
                 <input
-                  type="number"
+                  inputMode="decimal"
                   className="w-full border rounded-md px-2 py-1"
-                  value={editing.escalation_pct}
+                  value={String(editing.escalation_pct)}
                   onChange={(e) =>
                     setEditing((s) => s && ({
                       ...s,
-                      escalation_pct: Number(e.target.value),
-                      escalation_freq: Number(e.target.value) > 0 ? "annual" : "none",
+                      escalation_pct: e.target.value,
+                      escalation_freq: toNum(e.target.value, 0) > 0 ? "annual" : "none",
                     }))
                   }
                 />
@@ -528,11 +542,11 @@ export default function ServicesTable({ scenarioId }: Props) {
               <div>
                 <label className="text-xs text-gray-600">Tax rate %</label>
                 <input
-                  type="number"
+                  inputMode="decimal"
                   className="w-full border rounded-md px-2 py-1"
-                  value={editing.tax_rate}
+                  value={String(editing.tax_rate)}
                   onChange={(e) =>
-                    setEditing((s) => s && { ...s, tax_rate: Number(e.target.value) })
+                    setEditing((s) => s && { ...s, tax_rate: e.target.value })
                   }
                 />
               </div>
@@ -565,13 +579,10 @@ export default function ServicesTable({ scenarioId }: Props) {
             </div>
 
             <div className="flex items-center justify-end gap-2">
-              <button className="px-3 py-2 rounded-md border" onClick={closeForm}>
+              <button className={BTN} onClick={closeForm}>
                 Cancel
               </button>
-              <button
-                className="px-3 py-2 rounded-md bg-black text-white"
-                onClick={saveForm}
-              >
+              <button className={BTN} onClick={saveForm}>
                 Save
               </button>
             </div>

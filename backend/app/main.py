@@ -22,6 +22,8 @@ from .api import (
     boq,                  # BOQ router
     workflow,             # Workflow router
     twc,                  # <-- ONLY TWC router (scenario_twc KALDIRILDI)
+    scenario_fx, 
+    scenario_tax,         # FX Rates router (NEW)
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -77,11 +79,12 @@ app.include_router(leads.router)
 app.include_router(business_cases.router)
 
 # Inputs
-app.include_router(boq.router)                # BOQ
-app.include_router(twc.router)                # TWC (only this)
-app.include_router(scenario_capex.router)     # CAPEX
-app.include_router(scenario_services.router)  # SERVICES (OPEX)
-app.include_router(scenario_overheads.router) # Overheads
-
+app.include_router(boq.router)                 # BOQ
+app.include_router(twc.router)                 # TWC (only this)
+app.include_router(scenario_capex.router)      # CAPEX
+app.include_router(scenario_services.router)   # SERVICES (OPEX)
+app.include_router(scenario_overheads.router)  # Overheads
+app.include_router(scenario_fx.router)         # FX (NEW)
+app.include_router(scenario_tax.router)
 # Workflow
 app.include_router(workflow.router)
