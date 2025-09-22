@@ -1,9 +1,11 @@
 # backend/app/main.py
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import twc  # <-- mevcut
+
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
+
+# Router imports (relative)
 from .api import (
     auth,
     accounts,
@@ -16,9 +18,10 @@ from .api import (
     business_cases,       # Business Case & Scenario API
     scenario_overheads,   # Overheads router
     scenario_capex,       # CAPEX router
-    scenario_services,    # NEW: SERVICES (OPEX) router
+    scenario_services,    # SERVICES (OPEX) router
     boq,                  # BOQ router
-    workflow,             # Workflow router (BOQ -> TWC -> CAPEX -> Services)
+    workflow,             # Workflow router
+    twc,                  # <-- ONLY TWC router (scenario_twc KALDIRILDI)
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -70,10 +73,15 @@ app.include_router(users.router)
 app.include_router(roles.router)
 app.include_router(secure.router)
 app.include_router(leads.router)
+
 app.include_router(business_cases.router)
-app.include_router(scenario_overheads.router)
-app.include_router(boq.router)               # BOQ
-app.include_router(workflow.router)          # Workflow
-app.include_router(scenario_capex.router)    # CAPEX
-app.include_router(scenario_services.router) # NEW: SERVICES (OPEX)
-app.include_router(twc.router)
+
+# Inputs
+app.include_router(boq.router)                # BOQ
+app.include_router(twc.router)                # TWC (only this)
+app.include_router(scenario_capex.router)     # CAPEX
+app.include_router(scenario_services.router)  # SERVICES (OPEX)
+app.include_router(scenario_overheads.router) # Overheads
+
+# Workflow
+app.include_router(workflow.router)

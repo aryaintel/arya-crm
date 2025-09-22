@@ -1,0 +1,106 @@
+# backend/app/api/scenario_twc.py
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Path
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+from sqlalchemy import select
+
+from ..models import Scenario, ScenarioTWC
+from .deps import get_db, get_current_user  # mevcut auth/db bağımlılığı
+
+router = APIRouter(
+    prefix="/scenarios",
+    tags=["twc"],
+)
+
+# =========================
+# Schemas (Excel i.WC paraleli)
+# =========================
+class TWCIn(BaseModel):
+    dso_days: int = Field(45, ge=0, le=365, description="Days Sales Outstanding")
+    dpo_days: int = Field(30, ge=0, le=365, description="Days Payables Outstanding")
+    inventory_days: Optional[int] = Field(None, ge=0, le=365, description="Days Inventory (opsiyonel)")
+    notes: Optional[str] = None
+
+
+class TWCOut(BaseModel):
+    id: int
+    scenario_id: int
+    dso_days: int
+    dpo_days: int
+    inventory_days: Optional[int]
+    notes: Optional[str]
+
+    class Config:
+        orm_mode = True
+
+
+# =========================
+# Helpers
+# =========================
+def _ensure_scenario(db: Session, scenario_id: int) -> Scenario:
+    sc = db.get(Scenario, scenario_id)
+    if not sc:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return sc
+
+
+def _get_or_none(db: Session, scenario_id: int) -> Optional[ScenarioTWC]:
+    stmt = select(ScenarioTWC).where(ScenarioTWC.scenario_id == scenario_id)
+    return db.execute(stmt).scalars().first()
+
+
+# =========================
+# Routes
+# =========================
+@router.get(
+    "/{scenario_id}/twc",
+    response_model=TWCOut,
+    summary="Get TWC settings for a scenario",
+)
+def get_twc(
+    scenario_id: int = Path(..., ge=1),
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    _ensure_scenario(db, scenario_id)
+    row = _get_or_none(db, scenario_id)
+    if not row:
+        # TWC kaydı henüz yoksa 404 dön (CAPEX list yaklaşımıyla tutarlı)
+        raise HTTPException(status_code=404, detail="TWC settings not found for this scenario")
+    return row
+
+
+@router.put(
+    "/{scenario_id}/twc",
+    response_model=TWCOut,
+    summary="Upsert TWC settings for a scenario",
+)
+def upsert_twc(
+    payload: TWCIn,
+    scenario_id: int = Path(..., ge=1),
+    db: Session = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    _ensure_scenario(db, scenario_id)
+
+    row = _get_or_none(db, scenario_id)
+    if row is None:
+        # create (ilk kez kayıt)
+        row = ScenarioTWC(
+            scenario_id=scenario_id,
+            dso_days=payload.dso_days,
+            dpo_days=payload.dpo_days,
+            inventory_days=payload.inventory_days,
+            notes=payload.notes,
+        )
+        db.add(row)
+    else:
+        # update
+        for k, v in payload.dict().items():
+            setattr(row, k, v)
+        db.add(row)
+
+    db.commit()
+    db.refresh(row)
+    return row

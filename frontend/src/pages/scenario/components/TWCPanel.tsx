@@ -9,12 +9,12 @@ type Props = {
 };
 
 type TWCIn = {
-  twc_dso_days?: number | string;
-  twc_dpo_days?: number | string;
-  twc_dio_days?: number | string;
-  twc_freight_pct_of_sales?: number | string;
-  twc_safety_stock_pct_cogs?: number | string;
-  twc_other_wc_fixed?: number | string;
+  twc_dso_days?: number | string | null;
+  twc_dpo_days?: number | string | null;
+  twc_dio_days?: number | string | null;
+  twc_freight_pct_of_sales?: number | string | null;
+  twc_safety_stock_pct_cogs?: number | string | null;
+  twc_other_wc_fixed?: number | string | null;
 };
 type TWCOut = TWCIn & { scenario_id: number };
 
@@ -36,30 +36,21 @@ type TWCPreview = {
   totals: Record<string, number>;
 };
 
-function num(v: any): number {
+function numOrNull(v: any): number | null {
+  if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  return Number.isFinite(n) ? n : null;
+}
+function clamp(v: number | null, min: number, max: number): number | null {
+  if (v === null) return null;
+  return Math.max(min, Math.min(max, v));
 }
 function cls(...a: (string | false | undefined)[]) {
   return a.filter(Boolean).join(" ");
 }
 
-// Number formatter: en-US locale, 2 decimals
-const fmt2 = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
-const f2 = (x: any): string => {
-  const n = Number(x);
-  return Number.isFinite(n) ? fmt2.format(n) : "0.00";
-};
-
-// null güvenli birleştirme — TWC state’i yoksa default’la başlatır
-function mergeTWC(
-  current: TWCOut | null,
-  patch: Partial<TWCOut>,
-  scenarioId: number
-): TWCOut {
+// null güvenli birleştirme — state yoksa default’la başlatır
+function mergeTWC(current: TWCOut | null, patch: Partial<TWCOut>, scenarioId: number): TWCOut {
   const base: TWCOut = {
     scenario_id: scenarioId,
     twc_dso_days: 45,
@@ -78,6 +69,7 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [useBoqFreight, setUseBoqFreight] = useState(true);
 
   async function load() {
     setLoading(true);
@@ -86,7 +78,12 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
       const data = await apiGet<TWCOut>(`/scenarios/${scenarioId}/twc`);
       setTwc(data);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load TWC.");
+      // Eğer 404 ise default değerlerle ekranda başlat (backend ilk PUT ile oluşturacak)
+      if (e?.response?.status === 404) {
+        setTwc(mergeTWC(null, {}, scenarioId));
+      } else {
+        setErr(e?.message || "Failed to load TWC.");
+      }
     } finally {
       setLoading(false);
     }
@@ -102,13 +99,14 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
     setSaving(true);
     setErr(null);
     try {
+      // günler 0–365, yüzdeler 0–100, other_wc_fixed ≥ 0
       const payload: TWCIn = {
-        twc_dso_days: num(twc.twc_dso_days),
-        twc_dpo_days: num(twc.twc_dpo_days),
-        twc_dio_days: num(twc.twc_dio_days),
-        twc_freight_pct_of_sales: num(twc.twc_freight_pct_of_sales),
-        twc_safety_stock_pct_cogs: num(twc.twc_safety_stock_pct_cogs),
-        twc_other_wc_fixed: num(twc.twc_other_wc_fixed),
+        twc_dso_days: clamp(numOrNull(twc.twc_dso_days), 0, 365),
+        twc_dpo_days: clamp(numOrNull(twc.twc_dpo_days), 0, 365),
+        twc_dio_days: clamp(numOrNull(twc.twc_dio_days), 0, 365),
+        twc_freight_pct_of_sales: clamp(numOrNull(twc.twc_freight_pct_of_sales), 0, 100),
+        twc_safety_stock_pct_cogs: clamp(numOrNull(twc.twc_safety_stock_pct_cogs), 0, 100),
+        twc_other_wc_fixed: Math.max(0, numOrNull(twc.twc_other_wc_fixed) ?? 0),
       };
       const res = await apiPut<TWCOut>(`/scenarios/${scenarioId}/twc`, payload);
       setTwc(res);
@@ -123,7 +121,10 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
   async function preview() {
     setErr(null);
     try {
-      const res = await apiPost<TWCPreview>(`/scenarios/${scenarioId}/twc/preview`, {});
+      const res = await apiPost<TWCPreview>(
+        `/scenarios/${scenarioId}/twc/preview?use_boq_freight=${useBoqFreight ? "true" : "false"}`,
+        {}
+      );
       setPv(res);
     } catch (e: any) {
       setPv(null);
@@ -144,14 +145,15 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
 
   const totalsFmt = useMemo(() => {
     const t = pv?.totals || {};
+    const f = (x: any) => (typeof x === "number" ? x.toLocaleString() : (x ?? 0));
     return {
-      revenue: f2(t["revenue"]),
-      cogs: f2(t["cogs"]),
-      freight: f2(t["freight"]),
-      ar: f2(t["ar"]),
-      ap: f2(t["ap"]),
-      inv: f2(t["inv"]),
-      nwc: f2(t["nwc"]),
+      revenue: f(t["revenue"]),
+      cogs: f(t["cogs"]),
+      freight: f(t["freight"]),
+      ar: f(t["ar"]),
+      ap: f(t["ap"]),
+      inv: f(t["inv"]),
+      nwc: f(t["nwc"]),
     };
   }, [pv]);
 
@@ -159,7 +161,15 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-lg">TWC Assumptions</h3>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
+          <label className="flex items-center gap-2 text-sm mr-2">
+            <input
+              type="checkbox"
+              checked={useBoqFreight}
+              onChange={(e) => setUseBoqFreight(e.target.checked)}
+            />
+            Use BOQ freight in preview
+          </label>
           <button onClick={load} className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200">
             Refresh
           </button>
@@ -168,7 +178,7 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
             disabled={saving}
             className="px-3 py-1 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
           >
-            Save
+            {saving ? "Saving…" : "Save"}
           </button>
           <button onClick={preview} className="px-3 py-1 rounded bg-gray-100 hover:bg-gray-200">
             Preview NWC
@@ -197,7 +207,8 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
             <Field label="DSO (days)">
               <Input
                 type="number"
-                lang="en-US"
+                min={0}
+                max={365}
                 value={twc?.twc_dso_days ?? 45}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                   setTwc((p) => mergeTWC(p, { twc_dso_days: e.target.value }, scenarioId))
@@ -207,7 +218,8 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
             <Field label="DPO (days)">
               <Input
                 type="number"
-                lang="en-US"
+                min={0}
+                max={365}
                 value={twc?.twc_dpo_days ?? 30}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                   setTwc((p) => mergeTWC(p, { twc_dpo_days: e.target.value }, scenarioId))
@@ -217,7 +229,8 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
             <Field label="DIO (days)">
               <Input
                 type="number"
-                lang="en-US"
+                min={0}
+                max={365}
                 value={twc?.twc_dio_days ?? 20}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                   setTwc((p) => mergeTWC(p, { twc_dio_days: e.target.value }, scenarioId))
@@ -228,7 +241,8 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
             <Field label="Freight (% of sales)">
               <Input
                 type="number"
-                lang="en-US"
+                min={0}
+                max={100}
                 step="0.01"
                 value={twc?.twc_freight_pct_of_sales ?? 0}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -241,7 +255,8 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
             <Field label="Safety Stock (% of COGS)">
               <Input
                 type="number"
-                lang="en-US"
+                min={0}
+                max={100}
                 step="0.01"
                 value={twc?.twc_safety_stock_pct_cogs ?? 0}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -254,7 +269,7 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
             <Field label="Other WC (fixed)">
               <Input
                 type="number"
-                lang="en-US"
+                min={0}
                 step="0.01"
                 value={twc?.twc_other_wc_fixed ?? 0}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
@@ -288,13 +303,13 @@ export default function TWCTab({ scenarioId, onMarkedReady }: Props) {
                         <td className="px-3 py-2">
                           {b.year}/{String(b.month).padStart(2, "0")}
                         </td>
-                        <td className="px-3 py-2 text-right">{f2(b.revenue)}</td>
-                        <td className="px-3 py-2 text-right">{f2(b.cogs)}</td>
-                        <td className="px-3 py-2 text-right">{f2(b.freight)}</td>
-                        <td className="px-3 py-2 text-right">{f2(b.ar)}</td>
-                        <td className="px-3 py-2 text-right">{f2(b.ap)}</td>
-                        <td className="px-3 py-2 text-right">{f2(b.inv)}</td>
-                        <td className="px-3 py-2 text-right">{f2(b.nwc)}</td>
+                        <td className="px-3 py-2 text-right">{b.revenue.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.cogs.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.freight.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.ar.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.ap.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.inv.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right">{b.nwc.toLocaleString()}</td>
                       </tr>
                     ))}
                   </tbody>

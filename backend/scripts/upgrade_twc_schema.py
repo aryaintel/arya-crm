@@ -45,26 +45,19 @@ BACKFILL_SQL = [
 ]
 
 def table_exists(cx: sqlite3.Connection, name: str) -> bool:
-    cur = cx.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?;", (name,)
-    )
+    cur = cx.execute("SELECT name FROM sqlite_master WHERE type='table' AND name = ?;", (name,))
     return cur.fetchone() is not None
 
 def column_names(cx: sqlite3.Connection, table: str) -> set[str]:
-    cols = set()
-    for row in cx.execute(f"PRAGMA table_info({table});"):
-        cols.add(row[1])
-    return cols
+    return {row[1] for row in cx.execute(f"PRAGMA table_info({table});")}
 
 def ensure_index(cx: sqlite3.Connection, name: str, sql: str) -> None:
-    cur = cx.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND name = ?;", (name,)
-    )
+    cur = cx.execute("SELECT name FROM sqlite_master WHERE type='index' AND name = ?;", (name,))
     if cur.fetchone() is None:
         cx.execute(sql)
 
 def ensure_unique_per_scenario(cx: sqlite3.Connection) -> None:
-    # Hem UNIQUE constraint var hem de index ile destekleyelim (idempotent).
+    # UNIQUE constraint zaten var; ayrıca unique index ile destekleyelim (idempotent).
     ensure_index(
         cx,
         "uqx_twc_scenario",
@@ -73,15 +66,11 @@ def ensure_unique_per_scenario(cx: sqlite3.Connection) -> None:
 
 def seed_defaults(cx: sqlite3.Connection) -> int:
     created = 0
-    # Tüm senaryoları al
     scenario_ids = [row[0] for row in cx.execute("SELECT id FROM scenarios;").fetchall()]
     for sid in scenario_ids:
-        exists = cx.execute(
-            "SELECT 1 FROM scenario_twc WHERE scenario_id = ?;", (sid,)
-        ).fetchone()
+        exists = cx.execute("SELECT 1 FROM scenario_twc WHERE scenario_id = ?;", (sid,)).fetchone()
         if exists:
             continue
-        # Varsayılan değerlerle ekle
         cx.execute(
             """
             INSERT INTO scenario_twc (scenario_id, dso_days, dpo_days, inventory_days, notes)
@@ -103,7 +92,6 @@ def main() -> None:
         cx.close()
         sys.exit(1)
 
-    # Tabloyu oluştur / güncelle
     if not table_exists(cx, "scenario_twc"):
         print("[+] Creating table scenario_twc (TWC schema)…")
         cx.executescript(DDL_TABLE)
@@ -117,18 +105,14 @@ def main() -> None:
             else:
                 print(f"[=] Column already present: {col}")
 
-    # UNIQUE index/constraint garantisi (idempotent)
     ensure_unique_per_scenario(cx)
 
-    # Varsayılanları backfill
     for sql in BACKFILL_SQL:
         cx.execute(sql)
 
-    # Eksik senaryolar için seed
     created = seed_defaults(cx)
     cx.commit()
 
-    # Özet
     print("\n=== scenario_twc columns ===")
     for row in cx.execute("PRAGMA table_info(scenario_twc);"):
         print(f"- {row[1]:15} | {row[2]:10} | notnull={row[3]} | default={row[4]!r} | pk={row[5]}")

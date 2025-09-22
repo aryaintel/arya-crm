@@ -45,6 +45,39 @@ class User(Base):
     )
 
 
+# =========================
+# Scenario TWC (i.WC)
+# =========================
+class ScenarioTWC(Base):
+    __tablename__ = "scenario_twc"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Her senaryoda tek satır olacak (1:1) → unique constraint
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
+
+    # i.WC (Excel) ile aynı alanlar
+    dso_days = Column(Integer, nullable=False, default=45)   # 0..365
+    dpo_days = Column(Integer, nullable=False, default=30)   # 0..365
+    inventory_days = Column(Integer, nullable=True)          # NULL | 0..365
+    notes = Column(Text, nullable=True)
+
+    # 1:1 ilişki
+    scenario = relationship("Scenario", back_populates="twc", lazy="selectin")
+
+    __table_args__ = (
+        # Her scenario için tek satır
+        UniqueConstraint("scenario_id", name="uix_twc_scenario_unique"),
+        Index("ix_twc_scenario", "scenario_id"),
+        # Basit aralık kontrolleri
+        CheckConstraint("dso_days >= 0 AND dso_days <= 365", name="ck_twc_dso_days"),
+        CheckConstraint("dpo_days >= 0 AND dpo_days <= 365", name="ck_twc_dpo_days"),
+        CheckConstraint(
+            "(inventory_days IS NULL) OR (inventory_days >= 0 AND inventory_days <= 365)",
+            name="ck_twc_inventory_days",
+        ),
+    )
+
+
 class Role(Base):
     """
     Basit rol modeli; permissions virgül ayrımlı string:
@@ -238,6 +271,8 @@ class Scenario(Base):
     boq_items = relationship("ScenarioBOQItem", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
     capex_items = relationship("ScenarioCapex", backref="scenario", cascade="all, delete-orphan", lazy="selectin")
     services = relationship("ScenarioService", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
+    # NEW: 1:1 TWC ilişkisi
+    twc = relationship("ScenarioTWC", uselist=False, back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (
         Index("ix_scenarios_bc", "business_case_id"),

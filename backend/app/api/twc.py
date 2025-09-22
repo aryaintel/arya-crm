@@ -5,7 +5,7 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
 from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func
 
 from ..models import (
     Scenario,
@@ -13,6 +13,7 @@ from ..models import (
     ScenarioProduct,
     ScenarioProductMonth,
     ScenarioBOQItem,
+    ScenarioTWC,  # ← yeni tablo (dso/dpo/dio burada)
 )
 from .deps import get_db, get_current_user
 
@@ -22,22 +23,27 @@ router = APIRouter(
 )
 
 # ======================================================
-# TWC Assumption Anahtarları (scenario_overheads.name)
+# TWC Assumption Anahtarları (legacy - scenario_overheads.name)
 # ======================================================
-# - Bu anahtarları "fixed" tipli overhead satırlarında tutuyoruz.
-# - Miktar/oran/days değerleri 'amount' alanına yazılıyor.
-# - İleride istenirse ayrı tabloya taşınabilir; API değişmez.
-
+# DSO/DPO/DIO artık scenario_twc tablosunda saklanıyor.
+# Aşağıdaki anahtarlar geriye uyumluluk ve ek parametreler için tutuluyor.
 TWC_KEYS = {
-    # Tahsilat / Ödeme / Stok günleri
+    # Günler (legacy anahtar isimleri – UI sözleşmesi değişmesin)
     "twc_dso_days",      # Days Sales Outstanding (alacak)
     "twc_dpo_days",      # Days Payables Outstanding (borç)
     "twc_dio_days",      # Days Inventory Outstanding (stok)
 
-    # Lojistik ve diğer yardımcı parametreler (opsiyonel)
+    # Ek parametreler (şimdilik overheads'te)
     "twc_freight_pct_of_sales",   # Satışın yüzdesi olarak navlun (opsiyonel)
     "twc_safety_stock_pct_cogs",  # COGS'un yüzdesi olarak emniyet stoğu (opsiyonel)
     "twc_other_wc_fixed",         # Sabit ek işletme sermayesi (para tutarı)
+}
+
+# scenario_twc alan eşlemesi (UI alan adı -> tablo kolonu)
+MAP_TWC_COL = {
+    "twc_dso_days": "dso_days",
+    "twc_dpo_days": "dpo_days",
+    "twc_dio_days": "inventory_days",
 }
 
 def _ensure_scenario(db: Session, scenario_id: int) -> Scenario:
@@ -65,7 +71,6 @@ class TWCIn(BaseModel):
 
     @validator("*", pre=True)
     def _none_to_decimal(cls, v):
-        # Pydantic'te None dışı sayıları Decimal'e çevirmeyi kolaylaştır
         if v is None:
             return v
         return Decimal(str(v))
@@ -94,7 +99,7 @@ class TWCPreview(BaseModel):
 # =========================
 # Internal helpers
 # =========================
-def _load_twcs(db: Session, scenario_id: int) -> Dict[str, Decimal]:
+def _load_overhead_twcs(db: Session, scenario_id: int) -> Dict[str, Decimal]:
     """scenario_overheads tablosundan TWC anahtarlarını oku (fixed)."""
     stmt = (
         select(ScenarioOverhead)
@@ -112,10 +117,9 @@ def _load_twcs(db: Session, scenario_id: int) -> Dict[str, Decimal]:
                 pass
     return out
 
-def _upsert_fixed(db: Session, scenario_id: int, key: str, value: Optional[Decimal]) -> None:
-    """ScenarioOverhead'te (fixed) tek satır upsert et."""
+def _upsert_overhead_fixed(db: Session, scenario_id: int, key: str, value: Optional[Decimal]) -> None:
+    """ScenarioOverhead'te (fixed) tek satır upsert et (yalnız ek parametreler için)."""
     if value is None:
-        # None gönderildiyse dokunma (silme davranışı istemiyoruz)
         return
     row = db.execute(
         select(ScenarioOverhead)
@@ -175,9 +179,6 @@ def _monthly_revenue_cogs(db: Session, scenario_id: int) -> Dict[tuple, Dict[str
 def _monthly_freight_from_boq(db: Session, scenario_id: int) -> Dict[tuple, Decimal]:
     """
     BOQ üzerinden 'freight' kalemlerini ay bazında kabaca dağıtır.
-    - frequency='once' ise start_year/start_month'a yazar
-    - frequency='monthly' ise 'months' kadar eşit dağıtır
-    - diğer freq türleri (per_shipment, per_tonne) bu önizlemede sadeleştirilmiş olarak yoksayılır
     """
     stmt = select(ScenarioBOQItem).where(ScenarioBOQItem.scenario_id == scenario_id)
     rows = db.execute(stmt).scalars().all()
@@ -200,19 +201,46 @@ def _monthly_freight_from_boq(db: Session, scenario_id: int) -> Dict[tuple, Deci
                 month_cnt = int(r.months)
                 per = (total / Decimal(month_cnt)) if month_cnt > 0 else Decimal("0")
                 y, m = int(r.start_year), int(r.start_month)
-                for i in range(month_cnt):
+                for _ in range(month_cnt):
                     key = (y, m)
                     agg[key] = agg.get(key, Decimal("0")) + per
-                    # ay ilerlet
                     m += 1
                     if m > 12:
                         m = 1
                         y += 1
         else:
-            # per_shipment, per_tonne: önizlemede sadeleştirilmiş senaryo
             pass
 
     return agg
+
+# ---- scenario_twc helpers ----
+def _get_scenario_twc(db: Session, scenario_id: int) -> Optional[ScenarioTWC]:
+    stmt = select(ScenarioTWC).where(ScenarioTWC.scenario_id == scenario_id)
+    return db.execute(stmt).scalars().first()
+
+def _ensure_scenario_twc(db: Session, scenario_id: int) -> ScenarioTWC:
+    """Yoksa overhead değerlerinden migrate ederek scenario_twc kaydı oluşturur."""
+    row = _get_scenario_twc(db, scenario_id)
+    if row:
+        return row
+
+    # Migrate from overhead defaults
+    oh = _load_overhead_twcs(db, scenario_id)
+    dso = Decimal(str(oh.get("twc_dso_days", 45)))
+    dpo = Decimal(str(oh.get("twc_dpo_days", 30)))
+    dio = Decimal(str(oh.get("twc_dio_days", 20)))
+
+    row = ScenarioTWC(
+        scenario_id=scenario_id,
+        dso_days=int(dso),
+        dpo_days=int(dpo),
+        inventory_days=int(dio),
+        notes="Auto-created from overhead TWC keys",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 # =========================
@@ -221,7 +249,7 @@ def _monthly_freight_from_boq(db: Session, scenario_id: int) -> Dict[tuple, Deci
 @router.get(
     "/{scenario_id}/twc",
     response_model=TWCOut,
-    summary="Get TWC assumptions (stored in scenario_overheads as fixed items)",
+    summary="Get TWC assumptions (dso/dpo/dio from scenario_twc; extras from overheads)",
 )
 def get_twc(
     scenario_id: int = Path(..., ge=1),
@@ -229,12 +257,23 @@ def get_twc(
     _user=Depends(get_current_user),
 ):
     sc = _ensure_scenario(db, scenario_id)
-    existing = _load_twcs(db, scenario_id)
 
-    # Varsayılanlarla birleştir
+    # scenario_twc (core günler)
+    twc_row = _ensure_scenario_twc(db, scenario_id)
+
+    # overheads (ek parametreler)
+    existing = _load_overhead_twcs(db, scenario_id)
+
     merged: Dict[str, Decimal] = {}
     defaults = TWCIn().dict()
-    for k in TWC_KEYS:
+
+    # core (tablodan)
+    merged["twc_dso_days"] = Decimal(str(twc_row.dso_days or defaults["twc_dso_days"]))
+    merged["twc_dpo_days"] = Decimal(str(twc_row.dpo_days or defaults["twc_dpo_days"]))
+    merged["twc_dio_days"] = Decimal(str((twc_row.inventory_days if twc_row.inventory_days is not None else defaults["twc_dio_days"])))
+
+    # extras (overheads)
+    for k in ("twc_freight_pct_of_sales", "twc_safety_stock_pct_cogs", "twc_other_wc_fixed"):
         merged[k] = Decimal(str(existing.get(k, defaults.get(k, 0) or 0)))
 
     return TWCOut(scenario_id=sc.id, **merged)
@@ -243,7 +282,7 @@ def get_twc(
 @router.put(
     "/{scenario_id}/twc",
     response_model=TWCOut,
-    summary="Upsert TWC assumptions (fixed rows in scenario_overheads)",
+    summary="Upsert TWC assumptions (core to scenario_twc; extras to overheads)",
 )
 def upsert_twc(
     payload: TWCIn,
@@ -253,21 +292,30 @@ def upsert_twc(
 ):
     sc = _ensure_scenario(db, scenario_id)
 
+    # 1) Core günler → scenario_twc
+    row = _get_scenario_twc(db, scenario_id)
+    if row is None:
+        row = ScenarioTWC(scenario_id=scenario_id)
+
+    # UI alanlarından tablo kolonlarına yaz
     data = payload.dict()
-    for k, v in data.items():
-        if k not in TWC_KEYS:
-            continue
-        _upsert_fixed(db, scenario_id, k, v)
+    if data.get("twc_dso_days") is not None:
+        row.dso_days = int(Decimal(str(data["twc_dso_days"])))
+    if data.get("twc_dpo_days") is not None:
+        row.dpo_days = int(Decimal(str(data["twc_dpo_days"])))
+    if data.get("twc_dio_days") is not None:
+        row.inventory_days = int(Decimal(str(data["twc_dio_days"])))
+
+    db.add(row)
+
+    # 2) Ek parametreler → overheads (legacy devam)
+    for k in ("twc_freight_pct_of_sales", "twc_safety_stock_pct_cogs", "twc_other_wc_fixed"):
+        _upsert_overhead_fixed(db, scenario_id, k, data.get(k))
 
     db.commit()
 
-    existing = _load_twcs(db, scenario_id)
-    merged: Dict[str, Decimal] = {}
-    defaults = TWCIn().dict()
-    for k in TWC_KEYS:
-        merged[k] = Decimal(str(existing.get(k, data.get(k, defaults.get(k, 0)) or 0)))
-
-    return TWCOut(scenario_id=sc.id, **merged)
+    # response
+    return get_twc(scenario_id, db, _user)
 
 
 @router.post(
@@ -295,10 +343,8 @@ def preview_twc(
 
     # Aylık gelir/COGS
     rc = _monthly_revenue_cogs(db, scenario_id)
-    # BOQ freight (opsiyonel)
     freight_boq = _monthly_freight_from_boq(db, scenario_id) if use_boq_freight else {}
 
-    # Sonuç kovaları
     buckets: List[TWCBucket] = []
     totals = {
         "revenue": Decimal("0"),
@@ -310,29 +356,23 @@ def preview_twc(
         "nwc": Decimal("0"),
     }
 
-    # (yıl, ay) sırasını belirle
     months = sorted(rc.keys())
-    # Eğer product month yoksa en azından boş preview döndür
     for (y, m) in months:
         revenue = rc[(y, m)]["rev"]
         cogs    = rc[(y, m)]["cogs"]
 
-        # Freight: BOQ freight + opsiyonel satış yüzdesi
         freight_from_sales = (revenue * freight_pct)
         freight_from_boq   = freight_boq.get((y, m), Decimal("0"))
         freight = freight_from_sales + freight_from_boq
 
-        # AR / AP / INV (basit formüller – Excel'deki “days” yaklaşımı)
-        # Not: 30 gün kabulü ile yaklaşık değerleme (aylar değişkense bu basitleştirme yeterli)
+        # Basit 30-gün yaklaşımı
         ar = (revenue * (dso / Decimal("30"))) if revenue > 0 else Decimal("0")
         ap = (cogs * (dpo / Decimal("30"))) if cogs > 0 else Decimal("0")
         inv = (cogs * (dio / Decimal("30"))) if cogs > 0 else Decimal("0")
-        # Emniyet stoğu (opsiyonel)
         inv = inv + (cogs * safety_pct)
 
         nwc = ar + inv - ap
 
-        # Toplamlar
         totals["revenue"] += revenue
         totals["cogs"]    += cogs
         totals["freight"] += freight
@@ -349,7 +389,6 @@ def preview_twc(
             ar=ar, ap=ap, inv=inv, nwc=nwc
         ))
 
-    # Sabit ek işletme sermayesini toplam NWC'ye ekle
     totals["nwc"] += other_fixed
 
     return TWCPreview(
