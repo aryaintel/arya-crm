@@ -1,8 +1,8 @@
-// frontend/src/pages/scenario/tabs/TaxTab.tsx
+﻿// frontend/src/pages/scenario/tabs/TaxTab.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPut, apiDelete, isApiError } from "../../../lib/api";
 
-type Props = { scenarioId: number };
+type Props = { scenarioId: number; onMarkedReady?: () => void; isReady?: boolean; };
 
 /* =========================
    Types (aligned with backend)
@@ -29,7 +29,7 @@ type TaxRule = {
   is_active: boolean;
 };
 
-// ✅ Backend resolve artık liste döndürüyor
+// âœ… Backend resolve artÄ±k liste dÃ¶ndÃ¼rÃ¼yor
 type ResolveResp = {
   items: TaxRule[];
 };
@@ -38,7 +38,11 @@ type ResolveResp = {
 type ResolveScopeUi = "all" | "sales" | "services" | "capex";
 const RESOLVE_SCOPES: ResolveScopeUi[] = ["all", "sales", "services", "capex"];
 
-// UI -> legacy backend mapping (legacy fallback'ı kaldırdık, ama fonksiyonu bıraktık)
+function cls(...a: (string | false | undefined)[]) {
+  return a.filter(Boolean).join(" ");
+}
+
+// UI -> legacy backend mapping (legacy fallback'Ä± kaldÄ±rdÄ±k, ama fonksiyonu bÄ±raktÄ±k)
 const toLegacyScope = (s: ResolveScopeUi) =>
   s === "sales" ? "SALES" : s === "services" ? "SERVICES" : s === "capex" ? "CAPEX" : "ALL";
 
@@ -73,7 +77,7 @@ const emptyRow = (y: number, m: number): TaxRule => ({
   is_active: true,
 });
 
-export default function TaxTab({ scenarioId }: Props) {
+export default function TaxTab({ scenarioId, onMarkedReady, isReady }: Props) {
   const [rows, setRows] = useState<TaxRule[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -91,7 +95,7 @@ export default function TaxTab({ scenarioId }: Props) {
   const [resYear, setResYear] = useState<number>(now.y);
   const [resMonth, setResMonth] = useState<number>(now.m);
 
-  // ✅ artık liste tutuyoruz
+  // âœ… artÄ±k liste tutuyoruz
   const [resolvedItems, setResolvedItems] = useState<TaxRule[] | null>(null);
 
   const baseUrl = `/scenarios/${scenarioId}/tax`;
@@ -192,7 +196,7 @@ export default function TaxTab({ scenarioId }: Props) {
   }
 
   /* =========================
-     Resolve (backend list modeline göre)
+     Resolve (backend list modeline gÃ¶re)
      ========================= */
   async function resolveTax() {
     setResolvedItems(null);
@@ -206,20 +210,31 @@ export default function TaxTab({ scenarioId }: Props) {
       }).toString();
 
       const data = await apiGet<ResolveResp>(`${baseUrl}/resolve?${q}`);
-      // güvenlik: data?.items dizi mi kontrol edelim
+      // gÃ¼venlik: data?.items dizi mi kontrol edelim
       const items = Array.isArray((data as any)?.items) ? (data as any).items as TaxRule[] : [];
       setResolvedItems(items);
     } catch (e: any) {
-      // 400/404/422 vb. hataları direkt göster
+      // 400/404/422 vb. hatalarÄ± direkt gÃ¶ster
       setErr(e?.message || "Resolve failed.");
     }
   }
 
-  // En uygun kaydı seç (backend zaten start_year/month DESC + id DESC sıralıyor)
+  // En uygun kaydÄ± seÃ§ (backend zaten start_year/month DESC + id DESC sÄ±ralÄ±yor)
   const best = useMemo(() => {
     if (!resolvedItems || resolvedItems.length === 0) return null;
     return resolvedItems[0];
   }, [resolvedItems]);
+
+  async function markReady() {
+    if (!confirm("Mark TAX as ready and move to SERVICES?")) return;
+    try {
+      await apiPost(`/scenarios/${scenarioId}/workflow/mark-tax-ready`, {});
+      alert("Workflow moved to SERVICES.");
+      onMarkedReady?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Cannot mark TAX as ready.");
+    }
+  }
 
   /* =========================
      Render
@@ -229,12 +244,31 @@ export default function TaxTab({ scenarioId }: Props) {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-semibold">Tax Rules</h3>
-        <div className="flex items-center gap-2">
-          <button onClick={openCreate} className="px-3 py-2 rounded-lg border hover:bg-gray-50">
+        <div className="flex flex-wrap gap-2 justify-end">
+          <button
+            onClick={reload}
+            className={cls("px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed",
+              loading && "cursor-progress"
+            )}
+            disabled={loading}
+          >
+            Refresh
+          </button>
+          <button
+            onClick={openCreate}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
             + New Rule
           </button>
-          <button onClick={reload} className="px-3 py-2 rounded-lg border hover:bg-gray-50" disabled={loading}>
-            Refresh
+          <button
+            onClick={markReady}
+            className={cls("px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500",
+              isReady && "opacity-60 cursor-not-allowed"
+            )}
+            disabled={isReady}
+            title={isReady ? "Already marked ready" : "Mark TAX as ready and move to SERVICES"}
+          >
+            Mark TAX Ready → SERVICES
           </button>
         </div>
       </div>
@@ -261,7 +295,7 @@ export default function TaxTab({ scenarioId }: Props) {
             {loading ? (
               <tr>
                 <td className="p-3" colSpan={9}>
-                  Loading…
+                  Loading...
                 </td>
               </tr>
             ) : rows.length === 0 ? (
@@ -283,7 +317,7 @@ export default function TaxTab({ scenarioId }: Props) {
                   <td className="p-2">
                     {r.end_year != null && r.end_month != null
                       ? `${fmt0.format(r.end_year)}/${String(r.end_month).padStart(2, "0")}`
-                      : "—"}
+                      : "â€”"}
                   </td>
                   <td className="p-2 text-center">
                     <input type="checkbox" checked={!!r.is_inclusive} readOnly />
@@ -360,13 +394,13 @@ export default function TaxTab({ scenarioId }: Props) {
             <div>
               <span className="text-gray-600 mr-1">Result:</span>
               <b>
-                {best.applies_to} @ {fmt0.format(resYear)}/{String(resMonth).padStart(2, "0")} → {fmtPct(best.rate_pct)}
+                {best.applies_to} @ {fmt0.format(resYear)}/{String(resMonth).padStart(2, "0")} â†’ {fmtPct(best.rate_pct)}
               </b>
             </div>
             <div className="text-gray-500">
               {best.name ? `name: ${best.name}` : ""}
-              {` • type: ${best.tax_type}`}
-              {` • inclusive: ${best.is_inclusive ? "yes" : "no"}`}
+              {` â€¢ type: ${best.tax_type}`}
+              {` â€¢ inclusive: ${best.is_inclusive ? "yes" : "no"}`}
             </div>
           </div>
         )}
@@ -544,3 +578,5 @@ export default function TaxTab({ scenarioId }: Props) {
     </div>
   );
 }
+
+

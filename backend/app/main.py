@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
+from .api import service_pricing, boq_pricing, formulations_api   # <-- NEW
 
 # Router imports (relative)
 from .api import (
@@ -23,7 +24,10 @@ from .api import (
     workflow,             # Workflow router
     twc,                  # ONLY TWC router
     scenario_fx, 
-    scenario_tax,         # TAX router
+    scenario_tax,
+    formulation_links_api,
+    index_series_api,
+    escalation_policies_api,         # TAX router
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -104,3 +108,9 @@ app.include_router(scenario_tax.router)        # TAX
 
 # Workflow
 app.include_router(workflow.router)
+app.include_router(service_pricing.router)     # PRICE PREVIEW (service)
+app.include_router(boq_pricing.router)         # PRICE PREVIEW (boq)
+app.include_router(formulations_api.router)    # FORMULATIONS CRUD
+app.include_router(formulation_links_api.router)
+app.include_router(index_series_api.router)
+app.include_router(escalation_policies_api.router)  # include'lar arasına ekle

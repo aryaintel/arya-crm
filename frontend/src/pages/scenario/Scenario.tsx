@@ -156,26 +156,6 @@ export default function ScenarioPage() {
   const canGoPL = !!flow?.is_services_ready;
 
   // --- Actions (Ready işaretleme) ---
-  async function markFxReady() {
-    try {
-      await apiPost(`/scenarios/${id}/workflow/mark-fx-ready`, {});
-      await loadAll();
-      setTabRaw("tax");
-    } catch (e: any) {
-      alert(e?.message || "Mark FX Ready başarısız.");
-    }
-  }
-
-  async function markTaxReady() {
-    try {
-      await apiPost(`/scenarios/${id}/workflow/mark-tax-ready`, {});
-      await loadAll();
-      setTabRaw("services");
-    } catch (e: any) {
-      alert(e?.message || "Mark TAX Ready başarısız.");
-    }
-  }
-
   async function markServicesReady() {
     try {
       await apiPost(`/scenarios/${id}/workflow/mark-services-ready`, {});
@@ -383,48 +363,28 @@ export default function ScenarioPage() {
           )}
 
           {tab === "fx" && (
-            <div className="rounded border p-4 bg-white space-y-4">
-              <FxTab scenarioId={id} />
-              <div className="flex items-center justify-end">
-                <button
-                  onClick={markFxReady}
-                  className={cls(
-                    "px-3 py-2 rounded bg-indigo-600 text-white hover:bg-indigo-700",
-                    flow.is_fx_ready && "opacity-60 cursor-not-allowed"
-                  )}
-                  disabled={!!flow.is_fx_ready}
-                  title={
-                    flow.is_fx_ready
-                      ? "Zaten hazır işaretlenmiş"
-                      : "FX'i Ready olarak işaretle"
-                  }
-                >
-                  Mark FX Ready
-                </button>
-              </div>
+            <div className="rounded border p-4 bg-white">
+              <FxTab
+                scenarioId={id}
+                isReady={!!flow.is_fx_ready}
+                onMarkedReady={async () => {
+                  await loadAll();
+                  setTabRaw("tax");
+                }}
+              />
             </div>
           )}
 
           {tab === "tax" && (
-            <div className="rounded border p-4 bg-white space-y-4">
-              <TaxTab scenarioId={id} />
-              <div className="flex items-center justify-end">
-                <button
-                  onClick={markTaxReady}
-                  className={cls(
-                    "px-3 py-2 rounded bg-rose-600 text-white hover:bg-rose-700",
-                    flow.is_tax_ready && "opacity-60 cursor-not-allowed"
-                  )}
-                  disabled={!!flow.is_tax_ready}
-                  title={
-                    flow.is_tax_ready
-                      ? "Zaten hazır işaretlenmiş"
-                      : "TAX'i Ready olarak işaretle"
-                  }
-                >
-                  Mark TAX Ready
-                </button>
-              </div>
+            <div className="rounded border p-4 bg-white">
+              <TaxTab
+                scenarioId={id}
+                isReady={!!flow.is_tax_ready}
+                onMarkedReady={async () => {
+                  await loadAll();
+                  setTabRaw("services");
+                }}
+              />
             </div>
           )}
 

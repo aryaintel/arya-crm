@@ -1,107 +1,12 @@
-// frontend/src/pages/scenario/components/ServicesTable.tsx
-import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
 function cls(...a: (string | false | undefined)[]): string {
   return a.filter(Boolean).join(" ");
 }
 
 
-type PaymentTerm = "monthly" | "annual_prepaid" | "one_time";
-type CashOutPolicy = "service_month" | "start_month" | "contract_anniversary";
-type EscalationFreq = "annual" | "none";
+// frontend/src/pages/scenario/components/ServicesTable.tsx
+import React, { useEffect, useMemo, useState } from "react";
 
-export type ServiceRow = {
-  id?: number;
-  scenario_id?: number;
-
-  // Basics
-  service_name: string;
-  category?: string | null;
-  vendor?: string | null;
-  unit?: string | null;
-
-  // Price / quantity
-  quantity: number | string;
-  unit_cost: number | string;
-  currency: string;
-
-  // Timing
-  start_year: number | string;
-  start_month: number | string;
-  duration_months?: number | null | string;
-  end_year?: number | null | string;
-  end_month?: number | null | string;
-
-  // Payment / cash
-  payment_term: PaymentTerm;
-  cash_out_month_policy: CashOutPolicy;
-
-  // Escalation
-  escalation_pct: number | string;
-  escalation_freq: EscalationFreq;
-
-  // Tax
-  tax_rate: number | string;
-  expense_includes_tax: boolean;
-
-  // Other
-  notes?: string | null;
-  is_active: boolean;
-};
-
-type Props = {
-  scenarioId: number;
-  onMarkedReady?: () => void;
-  isReady?: boolean;
-  token?: string; // optional � api helpers zaten local storage'dan aliyor
-};
-
-// ---------------------------------
-
-const paymentTerms: PaymentTerm[] = ["monthly", "annual_prepaid", "one_time"];
-const cashPolicies: CashOutPolicy[] = [
-  "service_month",
-  "start_month",
-  "contract_anniversary",
-];
-const escalationFreqs: EscalationFreq[] = ["annual", "none"];
-
-// ortak gri buton stili
-const BTN =
-  "px-3 py-2 rounded-md bg-gray-200 hover:bg-gray-300 border border-gray-300 text-gray-800";
-
-const emptyRow = (year: number, month: number): ServiceRow => ({
-  service_name: "",
-  category: "",
-  vendor: "",
-  unit: "",
-  quantity: 1,
-  unit_cost: 0,
-  currency: "TRY",
-  start_year: year,
-  start_month: month,
-  duration_months: null,
-  end_year: null,
-  end_month: null,
-  payment_term: "monthly",
-  cash_out_month_policy: "service_month",
-  escalation_pct: 0,
-  escalation_freq: "none",
-  tax_rate: 0,
-  expense_includes_tax: false,
-  notes: "",
-  is_active: true,
-});
-
-// "4,5" -> 4.5 güvenli dönüşüm
-function toNum(v: any, fallback = 0): number {
-  if (v === null || typeof v === "undefined") return fallback;
-  const s = String(v).trim().replace(",", ".");
-  const n = Number(s);
-  return Number.isFinite(n) ? n : fallback;
-}
-
-export default function ServicesTable({ scenarioId }: Props) {
+export default function ServicesTable({ scenarioId, onMarkedReady, isReady }: Props) {
   const [rows, setRows] = useState<ServiceRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -116,6 +21,17 @@ export default function ServicesTable({ scenarioId }: Props) {
   }, []);
 
   const baseUrl = `/scenarios/${scenarioId}/services`;
+
+  async function markReady() {
+    if (!confirm("Mark Services as ready and move to P&L?")) return;
+    try {
+      await apiPost(`/scenarios/${scenarioId}/workflow/mark-services-ready`, {});
+      alert("Workflow moved to READY.");
+      onMarkedReady?.();
+    } catch (e: any) {
+      alert(e?.message || "Cannot mark Services as ready.");
+    }
+  }
 
   async function reload() {
     setLoading(true);
@@ -214,12 +130,31 @@ export default function ServicesTable({ scenarioId }: Props) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-semibold">Services (OPEX)</h3>
-        <div className="flex items-center gap-2">
-          <button onClick={openCreate} className={BTN}>
+        <div className="flex flex-wrap gap-2 justify-end">
+          <button
+            onClick={reload}
+            className={cls("px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed",
+              loading && "cursor-progress"
+            )}
+            disabled={loading}
+          >
+            Refresh
+          </button>
+          <button
+            onClick={openCreate}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
             + New Service
           </button>
-          <button onClick={reload} className={BTN}>
-            Refresh
+          <button
+            onClick={markReady}
+            className={cls("px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500",
+              isReady && "opacity-60 cursor-not-allowed"
+            )}
+            disabled={isReady}
+            title={isReady ? "Already marked ready" : "Mark Services as ready and move to P&L"}
+          >
+            Mark Services Ready → P&L
           </button>
         </div>
       </div>
@@ -598,3 +533,4 @@ export default function ServicesTable({ scenarioId }: Props) {
     </div>
   );
 }
+

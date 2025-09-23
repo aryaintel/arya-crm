@@ -1,8 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+﻿import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
 
 type Props = {
   scenarioId: number;
+  onMarkedReady?: () => void;
+  isReady?: boolean;
 };
 
 type FXRate = {
@@ -46,7 +48,7 @@ const emptyRow = (y: number, m: number): FXRate => ({
   is_active: true,
 });
 
-export default function FXTab({ scenarioId }: Props) {
+export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
   const [rows, setRows] = useState<FXRate[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -167,22 +169,51 @@ export default function FXTab({ scenarioId }: Props) {
       setErr(e?.response?.data?.detail || e?.message || "Resolve failed.");
     }
   }
+  async function markReady() {
+    if (!confirm("Mark FX as ready and move to TAX?")) return;
+    try {
+      await apiPost(`/scenarios/${scenarioId}/workflow/mark-fx-ready`, {});
+      alert("Workflow moved to TAX.");
+      onMarkedReady?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Cannot mark FX as ready.");
+    }
+  }
+
 
   return (
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-semibold">FX Rates</h3>
-        <div className="flex items-center gap-2">
-          <button onClick={openCreate} className="px-3 py-2 rounded-lg border hover:bg-gray-50">
+        <div className="flex flex-wrap gap-2 justify-end">
+          <button
+            onClick={reload}
+            className={cls("px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed",
+              loading && "cursor-progress"
+            )}
+            disabled={loading}
+          >
+            Refresh
+          </button>
+          <button
+            onClick={openCreate}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+          >
             + New Rate
           </button>
-          <button onClick={reload} className="px-3 py-2 rounded-lg border hover:bg-gray-50" disabled={loading}>
-            Refresh
+          <button
+            onClick={markReady}
+            className={cls("px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500",
+              isReady && "opacity-60 cursor-not-allowed"
+            )}
+            disabled={isReady}
+            title={isReady ? "Already marked ready" : "Mark FX as ready and move to TAX"}
+          >
+            Mark FX Ready &rarr; TAX
           </button>
         </div>
       </div>
-
       {err && <div className="p-3 rounded-md border border-red-300 bg-red-50 text-red-700">{err}</div>}
 
       {/* Table */}
@@ -191,7 +222,7 @@ export default function FXTab({ scenarioId }: Props) {
           <thead className="bg-gray-50 text-gray-700">
             <tr>
               <th className="p-2 text-left">Currency</th>
-              <th className="p-2 text-right">Rate → Base</th>
+              <th className="p-2 text-right">Rate â†’ Base</th>
               <th className="p-2 text-left">Start</th>
               <th className="p-2 text-left">End</th>
               <th className="p-2 text-left">Source</th>
@@ -204,7 +235,7 @@ export default function FXTab({ scenarioId }: Props) {
             {loading ? (
               <tr>
                 <td className="p-3" colSpan={8}>
-                  Loading…
+                  Loadingâ€¦
                 </td>
               </tr>
             ) : rows.length === 0 ? (
@@ -222,10 +253,10 @@ export default function FXTab({ scenarioId }: Props) {
                     {r.start_year}/{String(r.start_month).padStart(2, "0")}
                   </td>
                   <td className="p-2">
-                    {r.end_year && r.end_month ? `${r.end_year}/${String(r.end_month).padStart(2, "0")}` : "—"}
+                    {r.end_year && r.end_month ? `${r.end_year}/${String(r.end_month).padStart(2, "0")}` : "â€”"}
                   </td>
-                  <td className="p-2">{r.source || "—"}</td>
-                  <td className="p-2">{r.notes || "—"}</td>
+                  <td className="p-2">{r.source || "â€”"}</td>
+                  <td className="p-2">{r.notes || "â€”"}</td>
                   <td className="p-2 text-center">
                     <input type="checkbox" checked={!!r.is_active} onChange={() => toggleActive(r)} />
                   </td>
@@ -288,9 +319,9 @@ export default function FXTab({ scenarioId }: Props) {
             <div>
               <span className="text-gray-600 mr-1">Result:</span>
               <b>
-                {resolved.currency} @ {resolved.year}/{String(resolved.month).padStart(2, "0")} →
+                {resolved.currency} @ {resolved.year}/{String(resolved.month).padStart(2, "0")} â†’
                 {" "}
-                {resolved.rate_to_base == null ? "—" : resolved.rate_to_base.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                {resolved.rate_to_base == null ? "â€”" : resolved.rate_to_base.toLocaleString(undefined, { maximumFractionDigits: 6 })}
               </b>
             </div>
             <div className="text-gray-500">
@@ -428,3 +459,5 @@ export default function FXTab({ scenarioId }: Props) {
     </div>
   );
 }
+
+
