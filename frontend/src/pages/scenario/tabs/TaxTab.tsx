@@ -29,26 +29,16 @@ type TaxRule = {
   is_active: boolean;
 };
 
+// ✅ Backend resolve artık liste döndürüyor
 type ResolveResp = {
-  scenario_id: number;
-  // legacy/new dual support
-  tax_code?: string | null;          // legacy schema
-  scope?: string | null;             // legacy: SALES|SERVICES|CAPEX|ALL
-  applies_to?: AppliesTo | null;     // new: revenue|services|capex|all
-  year: number;
-  month: number;
-  found: boolean;
-  rate_pct: number | null;
-  inclusive?: boolean | null;
-  source_id?: number | null;
-  jurisdiction?: string | null;
+  items: TaxRule[];
 };
 
 // Resolve UI scope (kept simple, profit rare for resolve)
 type ResolveScopeUi = "all" | "sales" | "services" | "capex";
 const RESOLVE_SCOPES: ResolveScopeUi[] = ["all", "sales", "services", "capex"];
 
-// UI -> legacy backend mapping
+// UI -> legacy backend mapping (legacy fallback'ı kaldırdık, ama fonksiyonu bıraktık)
 const toLegacyScope = (s: ResolveScopeUi) =>
   s === "sales" ? "SALES" : s === "services" ? "SERVICES" : s === "capex" ? "CAPEX" : "ALL";
 
@@ -67,10 +57,6 @@ const fmt0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const fmtPct = (x: any) => {
   const n = Number(x);
   return Number.isFinite(n) ? `${fmt2.format(n)} %` : "0.00 %";
-};
-const f2 = (x: any) => {
-  const n = Number(x);
-  return Number.isFinite(n) ? fmt2.format(n) : "0.00";
 };
 
 const emptyRow = (y: number, m: number): TaxRule => ({
@@ -101,11 +87,12 @@ export default function TaxTab({ scenarioId }: Props) {
     const d = new Date();
     return { y: d.getFullYear(), m: d.getMonth() + 1 };
   }, []);
-  const [resTaxCode, setResTaxCode] = useState<string>("VAT"); // legacy fallback
   const [resScope, setResScope] = useState<ResolveScopeUi>("all");
   const [resYear, setResYear] = useState<number>(now.y);
   const [resMonth, setResMonth] = useState<number>(now.m);
-  const [resolved, setResolved] = useState<ResolveResp | null>(null);
+
+  // ✅ artık liste tutuyoruz
+  const [resolvedItems, setResolvedItems] = useState<TaxRule[] | null>(null);
 
   const baseUrl = `/scenarios/${scenarioId}/tax`;
 
@@ -115,7 +102,7 @@ export default function TaxTab({ scenarioId }: Props) {
   async function reload() {
     setLoading(true);
     setErr(null);
-    setResolved(null);
+    setResolvedItems(null);
     try {
       const data = await apiGet<TaxRule[]>(`${baseUrl}`);
       setRows(Array.isArray(data) ? data : []);
@@ -205,59 +192,34 @@ export default function TaxTab({ scenarioId }: Props) {
   }
 
   /* =========================
-     Resolve (dual schema compatible)
+     Resolve (backend list modeline göre)
      ========================= */
   async function resolveTax() {
-    setResolved(null);
+    setResolvedItems(null);
     setErr(null);
 
-    // Try new schema first
     try {
-      const q1 = new URLSearchParams({
+      const q = new URLSearchParams({
         applies_to: toAppliesTo(resScope), // revenue|services|capex|all
         year: String(resYear),
         month: String(resMonth),
       }).toString();
 
-      const data = await apiGet<ResolveResp>(`${baseUrl}/resolve?${q1}`);
-      setResolved(data);
-      setErr(null);
-      return;
+      const data = await apiGet<ResolveResp>(`${baseUrl}/resolve?${q}`);
+      // güvenlik: data?.items dizi mi kontrol edelim
+      const items = Array.isArray((data as any)?.items) ? (data as any).items as TaxRule[] : [];
+      setResolvedItems(items);
     } catch (e: any) {
-      // If 400/404/422, fall back to legacy; otherwise show error
-      if (!isApiError(e) || (e.status !== 400 && e.status !== 404 && e.status !== 422)) {
-        setErr(e?.message || "Resolve failed.");
-        return;
-      }
-    }
-
-    // Legacy fallback: tax_code + scope
-    try {
-      const code = (resTaxCode || "").trim();
-      if (code.length < 2) {
-        throw new Error("Please enter a Tax Code (e.g. VAT) for legacy resolve.");
-      }
-
-      const q2 = new URLSearchParams({
-        tax_code: code,
-        scope: toLegacyScope(resScope),
-        year: String(resYear),
-        month: String(resMonth),
-      }).toString();
-
-      const data = await apiGet<ResolveResp>(`${baseUrl}/resolve?${q2}`);
-      setResolved(data);
-      setErr(null);
-    } catch (e: any) {
+      // 400/404/422 vb. hataları direkt göster
       setErr(e?.message || "Resolve failed.");
     }
   }
 
-  function resolvedScopeLabel(r: ResolveResp) {
-    if (r.applies_to) return r.applies_to;
-    if (r.scope) return r.scope;
-    return toLegacyScope(resScope);
-  }
+  // En uygun kaydı seç (backend zaten start_year/month DESC + id DESC sıralıyor)
+  const best = useMemo(() => {
+    if (!resolvedItems || resolvedItems.length === 0) return null;
+    return resolvedItems[0];
+  }, [resolvedItems]);
 
   /* =========================
      Render
@@ -349,16 +311,7 @@ export default function TaxTab({ scenarioId }: Props) {
 
       {/* Resolve panel */}
       <div className="border rounded-xl p-3 sm:p-4 bg-white">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-          <div>
-            <div className="text-xs text-gray-600">Tax Code (legacy fallback)</div>
-            <input
-              className="border rounded-md px-2 py-1 w-full"
-              placeholder="VAT / WHT / CORP…"
-              value={resTaxCode}
-              onChange={(e) => setResTaxCode(e.target.value)}
-            />
-          </div>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
           <div>
             <div className="text-xs text-gray-600">Scope</div>
             <select
@@ -402,21 +355,25 @@ export default function TaxTab({ scenarioId }: Props) {
           </div>
         </div>
 
-        {resolved && (
+        {best && (
           <div className="mt-3 text-sm">
             <div>
               <span className="text-gray-600 mr-1">Result:</span>
               <b>
-                {resolvedScopeLabel(resolved)} @ {fmt0.format(resolved.year)}/
-                {String(resolved.month).padStart(2, "0")} →{" "}
-                {resolved.found && resolved.rate_pct != null ? fmtPct(resolved.rate_pct) : "—"}
+                {best.applies_to} @ {fmt0.format(resYear)}/{String(resMonth).padStart(2, "0")} → {fmtPct(best.rate_pct)}
               </b>
             </div>
             <div className="text-gray-500">
-              {resolved.tax_code ? `code: ${resolved.tax_code}` : ""}
-              {resolved.source_id ? ` (#${resolved.source_id})` : ""}
-              {typeof resolved.inclusive === "boolean" ? ` • inclusive: ${resolved.inclusive ? "yes" : "no"}` : ""}
+              {best.name ? `name: ${best.name}` : ""}
+              {` • type: ${best.tax_type}`}
+              {` • inclusive: ${best.is_inclusive ? "yes" : "no"}`}
             </div>
+          </div>
+        )}
+
+        {resolvedItems && resolvedItems.length > 1 && (
+          <div className="mt-2 text-xs text-gray-500">
+            {resolvedItems.length - 1} more matching rule(s) (ordered by most recent first)
           </div>
         )}
       </div>

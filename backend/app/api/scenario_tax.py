@@ -37,7 +37,7 @@ def _overlaps(
     s2: Tuple[int, int],
     e2: Optional[Tuple[int, int]],
 ) -> bool:
-    # overlap yoksa e1 < s2 Veya e2 < s1
+    # overlap yoksa e1 < s2 veya e2 < s1
     def lt(x: Tuple[int, int], y: Tuple[int, int]) -> bool:
         return _cmp(x, y) < 0
     if e1 is not None and lt(e1, s2):
@@ -74,16 +74,21 @@ class TaxIn(BaseModel):
 class TaxOut(TaxIn):
     id: int
     scenario_id: int
+
     class Config:
         orm_mode = True
+        # JSON encode sırasında Decimal'i güvenle serileştir
+        json_encoders = {Decimal: lambda v: float(v)}
 
 class TaxBulkIn(BaseModel):
     items: List[TaxIn]
 
 class TaxResolveOut(BaseModel):
     items: List[TaxOut]
+
     class Config:
         orm_mode = True
+        json_encoders = {Decimal: lambda v: float(v)}
 
 # ---------------------------
 # Internal overlap check
@@ -138,7 +143,6 @@ def list_tax_rules(
     stmt = select(ScenarioTaxRule).where(ScenarioTaxRule.scenario_id == scenario_id)
 
     if name:
-        # SQLite: LIKE case-insensitive
         stmt = stmt.where(ScenarioTaxRule.name.like(f"%{name}%"))
     if applies_to:
         stmt = stmt.where(ScenarioTaxRule.applies_to == applies_to)
@@ -147,7 +151,6 @@ def list_tax_rules(
     if active_only:
         stmt = stmt.where(ScenarioTaxRule.is_active.is_(True))
 
-    # Tarih aralığı çakışması (varsa)
     if year_from is not None and month_from is not None:
         y, m = year_from, month_from
         stmt = stmt.where(
@@ -172,6 +175,14 @@ def list_tax_rules(
         ScenarioTaxRule.id.asc(),
     )
     return db.execute(stmt).scalars().all()
+
+@router.options(
+    "/{scenario_id}/tax/resolve",
+    status_code=status.HTTP_204_NO_CONTENT,
+    include_in_schema=False,
+)
+def cors_preflight_resolve(scenario_id: int):
+    return None
 
 
 @router.post(
@@ -370,7 +381,6 @@ def resolve_tax(
 ):
     _ensure_scenario(db, scenario_id)
 
-    # aktif, kapsam eşleşen (scope veya all), dönemi kapsayan kurallar
     stmt = (
         select(ScenarioTaxRule)
         .where(ScenarioTaxRule.scenario_id == scenario_id)
@@ -395,5 +405,31 @@ def resolve_tax(
             ScenarioTaxRule.id.desc(),
         )
     )
-    items = db.execute(stmt).scalars().all()
+    rows = db.execute(stmt).scalars().all()
+
+    # ORM -> Pydantic (eksik/legacy kayıtlara karşı güvenli)
+    items: List[TaxOut] = []
+    for r in rows:
+        try:
+            items.append(TaxOut.from_orm(r))
+        except Exception:
+            # Legacy / eksik alanlara karşı defaultlarla doldur
+            items.append(
+                TaxOut(
+                    id=int(r.id),
+                    scenario_id=int(r.scenario_id),
+                    name=r.name or "",
+                    tax_type=(r.tax_type or "custom"),
+                    applies_to=(r.applies_to or "all"),
+                    rate_pct=Decimal(str(r.rate_pct or 0)),
+                    start_year=int(r.start_year or year),
+                    start_month=int(r.start_month or month),
+                    end_year=(int(r.end_year) if r.end_year is not None else None),
+                    end_month=(int(r.end_month) if r.end_month is not None else None),
+                    is_inclusive=bool(r.is_inclusive),
+                    notes=r.notes,
+                    is_active=bool(r.is_active),
+                )
+            )
+
     return TaxResolveOut(items=items)
