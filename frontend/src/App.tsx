@@ -31,6 +31,9 @@ import BusinessCasePage from "./pages/BusinessCase";
 // Tabs’lı senaryo sayfası
 import ScenarioPage from "./pages/scenario/Scenario";
 
+// NEW: Debug health page
+import Health from "./pages/debug/Health";
+
 import { apiGet, ApiError } from "./lib/api";
 import { clearToken, getToken, AUTH_EVENT } from "./lib/auth";
 
@@ -50,6 +53,7 @@ function usePageTitle() {
   if (pathname.startsWith("/users")) return "Users";
   if (pathname.startsWith("/roles")) return "Roles";
   if (pathname.startsWith("/login")) return "Login";
+  if (pathname.startsWith("/debug/health")) return "Health";
   return "Dashboard";
 }
 
@@ -230,6 +234,9 @@ export default function App() {
         <main className="flex-1 p-6">
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+
+            {/* PUBLIC: Debug health (CORS & bağlantı kontrolü) */}
+            <Route path="/debug/health" element={<Health />} />
 
             <Route
               path="/"

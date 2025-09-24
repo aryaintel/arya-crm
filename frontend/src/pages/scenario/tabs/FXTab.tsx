@@ -1,5 +1,6 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
-import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
+﻿// frontend/src/pages/scenario/tabs/FXTab.tsx
+import React, { useEffect, useMemo, useState } from "react";
+import { apiGet, apiPost, apiPut, apiDelete, ApiError } from "../../../lib/api";
 
 type Props = {
   scenarioId: number;
@@ -67,16 +68,26 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
   const [resMonth, setResMonth] = useState<number>(now.m);
   const [resolved, setResolved] = useState<ResolveResponse | null>(null);
 
-  const baseUrl = `/scenarios/${scenarioId}/fx`;
+  // Base URL'ler (PUT/DELETE iki varyasyonu da destekle)
+  const listBase = `/scenarios/${scenarioId}/fx`; // GET/POST + resolve
+  const idBase = `/scenarios/fx`;                 // tercih edilen PUT/DELETE
+  const fallbackIdBase = listBase;                // bazı kurulumlarda PUT/DELETE aynı list path’inde olabilir
 
   async function reload() {
     setLoading(true);
     setErr(null);
     try {
-      const data = await apiGet<FXRate[]>(`${baseUrl}`);
-      setRows(Array.isArray(data) ? data : []);
+      // Backend iki farklı biçimde dönebiliyor: [] ya da {items:[...]}
+      const data = await apiGet<any>(`${listBase}`);
+      const items: FXRate[] = Array.isArray(data) ? data : (data?.items ?? []);
+      setRows(Array.isArray(items) ? items : []);
     } catch (e: any) {
-      setErr(e?.response?.data?.detail || e?.message || "Failed to load FX rates.");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Failed to load FX rates.";
+      setErr(String(msg));
       setRows([]);
     } finally {
       setLoading(false);
@@ -110,11 +121,11 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
       start_year: Number(editing.start_year),
       start_month: Number(editing.start_month),
       end_year:
-        editing.end_year === undefined || editing.end_year === null || editing.end_year === ("" as any)
+        editing.end_year === undefined || editing.end_year === null || (editing.end_year as any) === ""
           ? null
           : Number(editing.end_year),
       end_month:
-        editing.end_month === undefined || editing.end_month === null || editing.end_month === ("" as any)
+        editing.end_month === undefined || editing.end_month === null || (editing.end_month as any) === ""
           ? null
           : Number(editing.end_month),
       is_active: !!editing.is_active,
@@ -122,9 +133,15 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
 
     try {
       if (editing.id) {
-        await apiPut<FXRate>(`${baseUrl}/${editing.id}`, payload);
+        // Önce tercih edilen /scenarios/fx/:id
+        try {
+          await apiPut<FXRate>(`${idBase}/${editing.id}`, payload);
+        } catch {
+          // Eski sürüm uyumluluğu: /scenarios/:scenarioId/fx/:id
+          await apiPut<FXRate>(`${fallbackIdBase}/${editing.id}`, payload);
+        }
       } else {
-        await apiPost<FXRate>(`${baseUrl}`, payload);
+        await apiPost<FXRate>(`${listBase}`, payload);
       }
       closeForm();
       await reload();
@@ -137,7 +154,11 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
     if (!id) return;
     if (!confirm("Delete this FX rate?")) return;
     try {
-      await apiDelete(`${baseUrl}/${id}`);
+      try {
+        await apiDelete(`${idBase}/${id}`);
+      } catch {
+        await apiDelete(`${fallbackIdBase}/${id}`);
+      }
       await reload();
     } catch (e: any) {
       setErr(e?.response?.data?.detail || e?.message || "Failed to delete.");
@@ -147,7 +168,12 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
   async function toggleActive(row: FXRate) {
     if (!row.id) return;
     try {
-      await apiPut(`${baseUrl}/${row.id}`, { ...row, is_active: !row.is_active });
+      const body = { ...row, is_active: !row.is_active };
+      try {
+        await apiPut(`${idBase}/${row.id}`, body);
+      } catch {
+        await apiPut(`${fallbackIdBase}/${row.id}`, body);
+      }
       await reload();
     } catch (e: any) {
       setErr(e?.response?.data?.detail || e?.message || "Failed to update.");
@@ -163,23 +189,22 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
         year: String(resYear),
         month: String(resMonth),
       }).toString();
-      const data = await apiGet<ResolveResponse>(`${baseUrl}/resolve?${q}`);
+      const data = await apiGet<ResolveResponse>(`${listBase}/resolve?${q}`);
       setResolved(data);
     } catch (e: any) {
       setErr(e?.response?.data?.detail || e?.message || "Resolve failed.");
     }
   }
+
   async function markReady() {
     if (!confirm("Mark FX as ready and move to TAX?")) return;
     try {
       await apiPost(`/scenarios/${scenarioId}/workflow/mark-fx-ready`, {});
-      alert("Workflow moved to TAX.");
       onMarkedReady?.();
     } catch (e: any) {
       alert(e?.response?.data?.detail || e?.message || "Cannot mark FX as ready.");
     }
   }
-
 
   return (
     <div className="space-y-4">
@@ -189,7 +214,8 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
         <div className="flex flex-wrap gap-2 justify-end">
           <button
             onClick={reload}
-            className={cls("px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed",
+            className={cls(
+              "px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed",
               loading && "cursor-progress"
             )}
             disabled={loading}
@@ -204,25 +230,37 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
           </button>
           <button
             onClick={markReady}
-            className={cls("px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500",
-              isReady && "opacity-60 cursor-not-allowed"
+            className={cls(
+              "px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500",
+              (isReady || rows.length === 0) && "opacity-60 cursor-not-allowed"
             )}
-            disabled={isReady}
-            title={isReady ? "Already marked ready" : "Mark FX as ready and move to TAX"}
+            disabled={isReady || rows.length === 0}
+            title={
+              isReady
+                ? "Already marked ready"
+                : rows.length === 0
+                ? "Add at least one FX rate first"
+                : "Mark FX as ready and move to TAX"
+            }
           >
-            Mark FX Ready &rarr; TAX
+            Mark FX Ready →
           </button>
         </div>
       </div>
-      {err && <div className="p-3 rounded-md border border-red-300 bg-red-50 text-red-700">{err}</div>}
+
+      {err && (
+        <div className="p-3 rounded-md border border-red-300 bg-red-50 text-red-700">
+          {err}
+        </div>
+      )}
 
       {/* Table */}
-      <div className="overflow-auto border rounded-xl">
+      <div className="overflow-auto border rounded-xl bg-white">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-gray-700">
             <tr>
               <th className="p-2 text-left">Currency</th>
-              <th className="p-2 text-right">Rate â†’ Base</th>
+              <th className="p-2 text-right">Rate → Base</th>
               <th className="p-2 text-left">Start</th>
               <th className="p-2 text-left">End</th>
               <th className="p-2 text-left">Source</th>
@@ -235,7 +273,7 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
             {loading ? (
               <tr>
                 <td className="p-3" colSpan={8}>
-                  Loadingâ€¦
+                  Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
@@ -248,20 +286,33 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
               rows.map((r) => (
                 <tr key={r.id} className="border-t">
                   <td className="p-2">{r.currency}</td>
-                  <td className="p-2 text-right">{Number(r.rate_to_base || 0).toLocaleString(undefined, { maximumFractionDigits: 6 })}</td>
+                  <td className="p-2 text-right">
+                    {Number(r.rate_to_base || 0).toLocaleString(undefined, {
+                      maximumFractionDigits: 6,
+                    })}
+                  </td>
                   <td className="p-2">
                     {r.start_year}/{String(r.start_month).padStart(2, "0")}
                   </td>
                   <td className="p-2">
-                    {r.end_year && r.end_month ? `${r.end_year}/${String(r.end_month).padStart(2, "0")}` : "â€”"}
+                    {r.end_year && r.end_month
+                      ? `${r.end_year}/${String(r.end_month).padStart(2, "0")}`
+                      : "—"}
                   </td>
-                  <td className="p-2">{r.source || "â€”"}</td>
-                  <td className="p-2">{r.notes || "â€”"}</td>
+                  <td className="p-2">{r.source || "—"}</td>
+                  <td className="p-2">{r.notes || "—"}</td>
                   <td className="p-2 text-center">
-                    <input type="checkbox" checked={!!r.is_active} onChange={() => toggleActive(r)} />
+                    <input
+                      type="checkbox"
+                      checked={!!r.is_active}
+                      onChange={() => toggleActive(r)}
+                    />
                   </td>
                   <td className="p-2 text-right">
-                    <button className="px-2 py-1 rounded-md border mr-2 hover:bg-gray-50" onClick={() => openEdit(r)}>
+                    <button
+                      className="px-2 py-1 rounded-md border mr-2 hover:bg-gray-50"
+                      onClick={() => openEdit(r)}
+                    >
                       Edit
                     </button>
                     <button
@@ -284,7 +335,7 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
           <div>
             <div className="text-xs text-gray-600">Currency</div>
             <input
-              className="border rounded-md px-2 py-1"
+              className="border rounded-md px-2 py-1 uppercase"
               value={resCurrency}
               onChange={(e) => setResCurrency(e.target.value)}
             />
@@ -309,7 +360,10 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
               onChange={(e) => setResMonth(Number(e.target.value))}
             />
           </div>
-          <button className="px-3 py-2 rounded-md border hover:bg-gray-50" onClick={resolveRate}>
+          <button
+            className="px-3 py-2 rounded-md border hover:bg-gray-50"
+            onClick={resolveRate}
+          >
             Resolve Rate
           </button>
         </div>
@@ -319,9 +373,13 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
             <div>
               <span className="text-gray-600 mr-1">Result:</span>
               <b>
-                {resolved.currency} @ {resolved.year}/{String(resolved.month).padStart(2, "0")} â†’
-                {" "}
-                {resolved.rate_to_base == null ? "â€”" : resolved.rate_to_base.toLocaleString(undefined, { maximumFractionDigits: 6 })}
+                {resolved.currency} @ {resolved.year}/
+                {String(resolved.month).padStart(2, "0")} →{" "}
+                {resolved.rate_to_base == null
+                  ? "—"
+                  : resolved.rate_to_base.toLocaleString(undefined, {
+                      maximumFractionDigits: 6,
+                    })}
               </b>
             </div>
             <div className="text-gray-500">
@@ -337,7 +395,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
         <div className="fixed inset-0 bg-black/30 z-40 flex items-end sm:items-center justify-center">
           <div className="bg-white w-full sm:max-w-2xl rounded-t-2xl sm:rounded-2xl shadow-xl p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h4 className="text-lg font-semibold">{editing.id ? "Edit FX Rate" : "New FX Rate"}</h4>
+              <h4 className="text-lg font-semibold">
+                {editing.id ? "Edit FX Rate" : "New FX Rate"}
+              </h4>
               <button className="px-3 py-1 rounded-md border" onClick={closeForm}>
                 Close
               </button>
@@ -349,7 +409,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                 <input
                   className="w-full border rounded-md px-2 py-1 uppercase"
                   value={editing.currency}
-                  onChange={(e) => setEditing((s) => s && { ...s, currency: e.target.value })}
+                  onChange={(e) =>
+                    setEditing((s) => s && { ...s, currency: e.target.value })
+                  }
                 />
               </div>
               <div>
@@ -359,7 +421,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                   step="0.000001"
                   className="w-full border rounded-md px-2 py-1 text-right"
                   value={editing.rate_to_base}
-                  onChange={(e) => setEditing((s) => s && { ...s, rate_to_base: Number(e.target.value) })}
+                  onChange={(e) =>
+                    setEditing((s) => s && { ...s, rate_to_base: Number(e.target.value) })
+                  }
                 />
               </div>
 
@@ -370,7 +434,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                     type="number"
                     className="w-full border rounded-md px-2 py-1"
                     value={editing.start_year}
-                    onChange={(e) => setEditing((s) => s && { ...s, start_year: Number(e.target.value) })}
+                    onChange={(e) =>
+                      setEditing((s) => s && { ...s, start_year: Number(e.target.value) })
+                    }
                   />
                 </div>
                 <div>
@@ -381,7 +447,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                     max={12}
                     className="w-full border rounded-md px-2 py-1"
                     value={editing.start_month}
-                    onChange={(e) => setEditing((s) => s && { ...s, start_month: Number(e.target.value) })}
+                    onChange={(e) =>
+                      setEditing((s) => s && { ...s, start_month: Number(e.target.value) })
+                    }
                   />
                 </div>
               </div>
@@ -394,7 +462,13 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                     className="w-full border rounded-md px-2 py-1"
                     value={editing.end_year ?? ""}
                     onChange={(e) =>
-                      setEditing((s) => s && { ...s, end_year: e.target.value === "" ? null : Number(e.target.value) })
+                      setEditing(
+                        (s) =>
+                          s && {
+                            ...s,
+                            end_year: e.target.value === "" ? null : Number(e.target.value),
+                          }
+                      )
                     }
                   />
                 </div>
@@ -407,7 +481,13 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                     className="w-full border rounded-md px-2 py-1"
                     value={editing.end_month ?? ""}
                     onChange={(e) =>
-                      setEditing((s) => s && { ...s, end_month: e.target.value === "" ? null : Number(e.target.value) })
+                      setEditing(
+                        (s) =>
+                          s && {
+                            ...s,
+                            end_month: e.target.value === "" ? null : Number(e.target.value),
+                          }
+                      )
                     }
                   />
                 </div>
@@ -418,7 +498,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                 <input
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.source ?? ""}
-                  onChange={(e) => setEditing((s) => s && { ...s, source: e.target.value })}
+                  onChange={(e) =>
+                    setEditing((s) => s && { ...s, source: e.target.value })
+                  }
                 />
               </div>
 
@@ -428,7 +510,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                   className="w-full border rounded-md px-2 py-1"
                   rows={3}
                   value={editing.notes ?? ""}
-                  onChange={(e) => setEditing((s) => s && { ...s, notes: e.target.value })}
+                  onChange={(e) =>
+                    setEditing((s) => s && { ...s, notes: e.target.value })
+                  }
                 />
               </div>
 
@@ -437,7 +521,9 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
                   id="fxActive"
                   type="checkbox"
                   checked={!!editing.is_active}
-                  onChange={(e) => setEditing((s) => s && { ...s, is_active: e.target.checked })}
+                  onChange={(e) =>
+                    setEditing((s) => s && { ...s, is_active: e.target.checked })
+                  }
                 />
                 <label htmlFor="fxActive" className="text-sm">
                   Active
@@ -459,5 +545,3 @@ export default function FXTab({ scenarioId, onMarkedReady, isReady }: Props) {
     </div>
   );
 }
-
-

@@ -6,6 +6,7 @@ type Props = {
   scenarioId: number;
   onChanged?: () => void;
   onMarkedReady?: () => void;
+  isReady?: boolean;
 };
 
 type BOQItem = {
@@ -62,8 +63,7 @@ function MonthInput({
   onChange: (next: { year: number | null; month: number | null }) => void;
   className?: string;
 }) {
-  const str =
-    value.year && value.month ? `${value.year}-${pad2(value.month)}` : "";
+  const str = value.year && value.month ? `${value.year}-${pad2(value.month)}` : "";
   return (
     <input
       type="month"
@@ -108,7 +108,7 @@ function MonthlyPreviewPivot({
 
   function getCell(metric: "revenue" | "cogs" | "gm", idx: number) {
     const r = rows[idx];
-    return (r?.[metric] ?? 0).toLocaleString();
+    return (r?.[metric] ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
   }
 
   return (
@@ -135,7 +135,7 @@ function MonthlyPreviewPivot({
                 </td>
               ))}
               <td className="px-3 py-2 text-right font-semibold">
-                {totals[m.key].toLocaleString()}
+                {totals[m.key].toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </td>
             </tr>
           ))}
@@ -143,8 +143,7 @@ function MonthlyPreviewPivot({
       </table>
       <div className="px-3 py-2 text-xs text-gray-500">
         Not: <code>monthly</code> satırlar girilen <b>Duration</b> süresince yayılır;
-        <code> once</code>/<code>per_shipment</code>/<code>per_tonne</code> tek seferlik
-        kabul edilir.
+        <code> once</code>/<code>per_shipment</code>/<code>per_tonne</code> tek seferlik kabul edilir.
       </div>
     </div>
   );
@@ -152,11 +151,7 @@ function MonthlyPreviewPivot({
 
 /* ========================================================= */
 
-export default function BOQTable({
-  scenarioId,
-  onChanged,
-  onMarkedReady,
-}: Props) {
+export default function BOQTable({ scenarioId, onChanged, onMarkedReady, isReady }: Props) {
   const [rows, setRows] = useState<BOQItem[]>([]);
   const [draft, setDraft] = useState<BOQItem | null>(null);
   const [loading, setLoading] = useState(false);
@@ -168,7 +163,7 @@ export default function BOQTable({
     setErr(null);
     try {
       const data = await apiGet<BOQItem[]>(`/scenarios/${scenarioId}/boq`);
-      setRows(data);
+      setRows(Array.isArray(data) ? data : []);
     } catch (e: any) {
       setErr(e?.response?.data?.detail || e?.message || "Failed to load BOQ.");
     } finally {
@@ -177,7 +172,8 @@ export default function BOQTable({
   }
   useEffect(() => {
     if (scenarioId) load();
-  }, [scenarioId]); // eslint-disable-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scenarioId]);
 
   /* Satır toplamları (liste üstünde) */
   const totals = useMemo(() => {
@@ -293,9 +289,7 @@ export default function BOQTable({
 
     const active = rows.filter(
       (r): r is BOQItem & { is_active: true; start_year: number; start_month: number } =>
-        !!r.is_active &&
-        typeof r.start_year === "number" &&
-        typeof r.start_month === "number"
+        !!r.is_active && typeof r.start_year === "number" && typeof r.start_month === "number"
     );
 
     for (const r of active) {
@@ -328,7 +322,7 @@ export default function BOQTable({
       }
     }
 
-    const rowsOut = [...(agg.entries() as IterableIterator<[string, MonthAgg]>)]
+    const rowsOut = [...agg.entries()]
       .map(([key, v]) => ({
         key,
         y: Number(key.slice(0, 4)),
@@ -381,7 +375,20 @@ export default function BOQTable({
           </button>
           <button
             onClick={markReady}
-            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+            className={cls(
+              "px-3 py-1.5 rounded-md text-sm",
+              isReady || rows.length === 0
+                ? "bg-indigo-300 text-white cursor-not-allowed"
+                : "bg-indigo-600 text-white hover:bg-indigo-500"
+            )}
+            disabled={isReady || rows.length === 0}
+            title={
+              isReady
+                ? "Already marked ready"
+                : rows.length === 0
+                ? "Add at least one BOQ item first"
+                : "Mark BOQ Ready and move to TWC"
+            }
           >
             Mark BOQ Ready → TWC
           </button>
@@ -422,6 +429,7 @@ export default function BOQTable({
                 <td className="px-3 py-2">
                   <input
                     className="w-full px-2 py-1 rounded border border-gray-300"
+                    placeholder="Section"
                     value={draft.section ?? ""}
                     onChange={(e) => setDraft({ ...draft, section: e.target.value })}
                   />
@@ -451,6 +459,7 @@ export default function BOQTable({
                 <td className="px-3 py-2">
                   <input
                     className="w-full px-2 py-1 rounded border border-gray-300"
+                    placeholder="Item"
                     value={draft.item_name}
                     onChange={(e) => setDraft({ ...draft, item_name: e.target.value })}
                   />
@@ -458,6 +467,7 @@ export default function BOQTable({
                 <td className="px-3 py-2">
                   <input
                     className="w-full px-2 py-1 rounded border border-gray-300"
+                    placeholder="kg"
                     value={draft.unit}
                     onChange={(e) => setDraft({ ...draft, unit: e.target.value })}
                   />
@@ -467,9 +477,7 @@ export default function BOQTable({
                     type="number"
                     className="w-full px-2 py-1 rounded border border-gray-300 text-right"
                     value={num(draft.quantity)}
-                    onChange={(e) =>
-                      setDraft({ ...draft, quantity: Number(e.target.value) })
-                    }
+                    onChange={(e) => setDraft({ ...draft, quantity: Number(e.target.value) })}
                   />
                 </td>
                 <td className="px-3 py-2">
@@ -477,9 +485,7 @@ export default function BOQTable({
                     type="number"
                     className="w-full px-2 py-1 rounded border border-gray-300 text-right"
                     value={num(draft.unit_price)}
-                    onChange={(e) =>
-                      setDraft({ ...draft, unit_price: Number(e.target.value) })
-                    }
+                    onChange={(e) => setDraft({ ...draft, unit_price: Number(e.target.value) })}
                   />
                 </td>
                 <td className="px-3 py-2">
@@ -487,9 +493,7 @@ export default function BOQTable({
                     type="number"
                     className="w-full px-2 py-1 rounded border border-gray-300 text-right"
                     value={num(draft.unit_cogs ?? 0)}
-                    onChange={(e) =>
-                      setDraft({ ...draft, unit_cogs: Number(e.target.value) })
-                    }
+                    onChange={(e) => setDraft({ ...draft, unit_cogs: Number(e.target.value) })}
                   />
                 </td>
                 <td className="px-3 py-2">
@@ -543,16 +547,20 @@ export default function BOQTable({
                   />
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {(num(draft.quantity) * num(draft.unit_price)).toLocaleString()}
+                  {(num(draft.quantity) * num(draft.unit_price)).toLocaleString(undefined, {
+                    maximumFractionDigits: 2,
+                  })}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  {(num(draft.quantity) * num(draft.unit_cogs ?? 0)).toLocaleString()}
+                  {(num(draft.quantity) * num(draft.unit_cogs ?? 0)).toLocaleString(undefined, {
+                    maximumFractionDigits: 2,
+                  })}
                 </td>
                 <td className="px-3 py-2 text-right">
                   {(
                     num(draft.quantity) * num(draft.unit_price) -
-                    (num(draft.quantity) * num(draft.unit_cogs ?? 0))
-                  ).toLocaleString()}
+                    num(draft.quantity) * num(draft.unit_cogs ?? 0)
+                  ).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                 </td>
                 <td className="px-3 py-2">
                   <div className="flex gap-2">
@@ -586,9 +594,7 @@ export default function BOQTable({
                       value={r.section ?? ""}
                       onChange={(e) =>
                         setRows((p) =>
-                          p.map((x) =>
-                            x.id === r.id ? { ...x, section: e.target.value } : x
-                          )
+                          p.map((x) => (x.id === r.id ? { ...x, section: e.target.value } : x))
                         )
                       }
                     />
@@ -627,9 +633,7 @@ export default function BOQTable({
                       value={r.item_name}
                       onChange={(e) =>
                         setRows((p) =>
-                          p.map((x) =>
-                            x.id === r.id ? { ...x, item_name: e.target.value } : x
-                          )
+                          p.map((x) => (x.id === r.id ? { ...x, item_name: e.target.value } : x))
                         )
                       }
                     />
@@ -639,9 +643,7 @@ export default function BOQTable({
                       className="w-full px-2 py-1 rounded border border-gray-300"
                       value={r.unit}
                       onChange={(e) =>
-                        setRows((p) =>
-                          p.map((x) => (x.id === r.id ? { ...x, unit: e.target.value } : x))
-                        )
+                        setRows((p) => p.map((x) => (x.id === r.id ? { ...x, unit: e.target.value } : x)))
                       }
                     />
                   </td>
@@ -652,11 +654,7 @@ export default function BOQTable({
                       value={num(r.quantity)}
                       onChange={(e) =>
                         setRows((p) =>
-                          p.map((x) =>
-                            x.id === r.id
-                              ? { ...x, quantity: Number(e.target.value) }
-                              : x
-                          )
+                          p.map((x) => (x.id === r.id ? { ...x, quantity: Number(e.target.value) } : x))
                         )
                       }
                     />
@@ -668,11 +666,7 @@ export default function BOQTable({
                       value={num(r.unit_price)}
                       onChange={(e) =>
                         setRows((p) =>
-                          p.map((x) =>
-                            x.id === r.id
-                              ? { ...x, unit_price: Number(e.target.value) }
-                              : x
-                          )
+                          p.map((x) => (x.id === r.id ? { ...x, unit_price: Number(e.target.value) } : x))
                         )
                       }
                     />
@@ -684,11 +678,7 @@ export default function BOQTable({
                       value={num(r.unit_cogs ?? 0)}
                       onChange={(e) =>
                         setRows((p) =>
-                          p.map((x) =>
-                            x.id === r.id
-                              ? { ...x, unit_cogs: Number(e.target.value) }
-                              : x
-                          )
+                          p.map((x) => (x.id === r.id ? { ...x, unit_cogs: Number(e.target.value) } : x))
                         )
                       }
                     />
@@ -727,10 +717,7 @@ export default function BOQTable({
                             x.id === r.id
                               ? {
                                   ...x,
-                                  months:
-                                    e.target.value === ""
-                                      ? null
-                                      : Number(e.target.value),
+                                  months: e.target.value === "" ? null : Number(e.target.value),
                                 }
                               : x
                           )
@@ -749,9 +736,7 @@ export default function BOQTable({
                       onChange={({ year, month }) =>
                         setRows((p) =>
                           p.map((x) =>
-                            x.id === r.id
-                              ? { ...x, start_year: year, start_month: month }
-                              : x
+                            x.id === r.id ? { ...x, start_year: year, start_month: month } : x
                           )
                         )
                       }
@@ -763,18 +748,20 @@ export default function BOQTable({
                       checked={!!r.is_active}
                       onChange={(e) =>
                         setRows((p) =>
-                          p.map((x) =>
-                            x.id === r.id
-                              ? { ...x, is_active: e.target.checked }
-                              : x
-                          )
+                          p.map((x) => (x.id === r.id ? { ...x, is_active: e.target.checked } : x))
                         )
                       }
                     />
                   </td>
-                  <td className="px-3 py-2 text-right">{lineRev.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right">{lineCogs.toLocaleString()}</td>
-                  <td className="px-3 py-2 text-right">{lineGM.toLocaleString()}</td>
+                  <td className="px-3 py-2 text-right">
+                    {lineRev.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {lineCogs.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {lineGM.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  </td>
                   <td className="px-3 py-2">
                     <div className="flex gap-2">
                       <button
@@ -802,13 +789,13 @@ export default function BOQTable({
                 Totals
               </td>
               <td className="px-3 py-2 text-right">
-                {totals.rev.toLocaleString()}
+                {totals.rev.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </td>
               <td className="px-3 py-2 text-right">
-                {totals.cogs.toLocaleString()}
+                {totals.cogs.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </td>
               <td className="px-3 py-2 text-right">
-                {totals.gm.toLocaleString()}
+                {totals.gm.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </td>
               <td />
             </tr>
@@ -818,13 +805,10 @@ export default function BOQTable({
 
       {showPreview && (
         <div className="mt-3 border rounded bg-white">
-          <div className="px-3 py-2 border-b bg-gray-50 font-medium">
-            Preview • Monthly schedule (active items)
-          </div>
+          <div className="px-3 py-2 border-b bg-gray-50 font-medium">Preview • Monthly schedule (active items)</div>
           <MonthlyPreviewPivot rows={schedule.rows} totals={schedule.totals} />
         </div>
       )}
     </div>
   );
 }
-

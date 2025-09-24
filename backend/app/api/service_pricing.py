@@ -417,6 +417,8 @@ def _boq_row_preview(cx: sqlite3.Connection, row: sqlite3.Row, y: int, m: int, y
     )
 
 
+# ... (dosyanın üst kısmı aynı)
+
 @router.get("/scenarios/{scenario_id}/price-preview")
 def scenario_price_preview(
     scenario_id: int,
@@ -428,63 +430,76 @@ def scenario_price_preview(
     strict=0 ise hatalı satırları atlayıp 'issues' altında raporlar.
     """
     y, m = _parse_ym(ym)
-    with _db() as cx:
-        svcs = cx.execute(
-            """
-            SELECT s.id, s.service_name, s.quantity, s.currency, s.formulation_id,
-                   s.price_escalation_policy_id,
-                   sc.default_price_escalation_policy_id,
-                   f.base_price, f.base_currency
-            FROM scenario_services s
-            LEFT JOIN product_formulations f ON s.formulation_id = f.id
-            LEFT JOIN scenarios sc ON sc.id = s.scenario_id
-            WHERE s.scenario_id = ?
-            """,
-            (scenario_id,),
-        ).fetchall()
+    try:
+        with _db() as cx:
+            svcs = cx.execute(
+                """
+                SELECT s.id, s.service_name, s.quantity, s.currency, s.formulation_id,
+                       s.price_escalation_policy_id,
+                       sc.default_price_escalation_policy_id,
+                       f.base_price, f.base_currency
+                FROM scenario_services s
+                LEFT JOIN product_formulations f ON s.formulation_id = f.id
+                LEFT JOIN scenarios sc ON sc.id = s.scenario_id
+                WHERE s.scenario_id = ?
+                """,
+                (scenario_id,),
+            ).fetchall()
 
-        boqs = cx.execute(
-            """
-            SELECT b.id, b.item_name, b.quantity, NULL as currency, b.formulation_id,
-                   f.base_price, f.base_currency,
-                   b.price_escalation_policy_id,
-                   sc.default_price_escalation_policy_id
-            FROM scenario_boq_items b
-            LEFT JOIN product_formulations f ON b.formulation_id = f.id
-            LEFT JOIN scenarios sc ON sc.id = b.scenario_id
-            WHERE b.scenario_id = ?
-            """,
-            (scenario_id,),
-        ).fetchall()
+            boqs = cx.execute(
+                """
+                SELECT b.id, b.item_name, b.quantity, NULL as currency, b.formulation_id,
+                       f.base_price, f.base_currency,
+                       b.price_escalation_policy_id,
+                       sc.default_price_escalation_policy_id
+                FROM scenario_boq_items b
+                LEFT JOIN product_formulations f ON b.formulation_id = f.id
+                LEFT JOIN scenarios sc ON sc.id = b.scenario_id
+                WHERE b.scenario_id = ?
+                """,
+                (scenario_id,),
+            ).fetchall()
 
-        lines, issues = [], []
-        total = Decimal("0")
+            lines, issues = [], []
+            total = Decimal("0")
 
-        def _accumulate(make_preview, row):
-            nonlocal total
-            try:
-                p = make_preview(cx, row, y, m, ym)
-                lines.append(p)
-                total += Decimal(p["line_total"])
-            except HTTPException as e:
-                if strict:
-                    raise
-                # kaynağı anlamlı dolduralım
-                src = "service" if make_preview is _service_row_preview else "boq"
-                issues.append({"id": row["id"], "source": src, "error": e.detail})
+            def _accumulate(make_preview, row):
+                nonlocal total
+                try:
+                    p = make_preview(cx, row, y, m, ym)
+                    lines.append(p)
+                    # güvenli cast: str(...) ile Decimal'ı her durumda doğru kur
+                    total += Decimal(str(p["line_total"]))
+                except HTTPException as e:
+                    if strict:
+                        # aynen yukarı fırlat → 404/409 gibi anlamlı bir kod döner
+                        raise
+                    src = "service" if make_preview is _service_row_preview else "boq"
+                    issues.append({"id": row["id"], "source": src, "error": e.detail})
+                except Exception as e:
+                    if strict:
+                        raise HTTPException(400, f"unexpected error while pricing: {e}")
+                    src = "service" if make_preview is _service_row_preview else "boq"
+                    issues.append({"id": row["id"], "source": src, "error": str(e)})
 
-        for r in svcs:
-            _accumulate(_service_row_preview, r)
-        for r in boqs:
-            _accumulate(_boq_row_preview, r)
+            for r in svcs:
+                _accumulate(_service_row_preview, r)
+            for r in boqs:
+                _accumulate(_boq_row_preview, r)
 
-        return {
-            "scenario_id": scenario_id,
-            "period": ym,
-            "total": str(total.quantize(Decimal("0.01"))),
-            "lines": lines,
-            "issues": issues,
-        }
+            return {
+                "scenario_id": scenario_id,
+                "period": ym,
+                "total": str(total.quantize(Decimal("0.01"))),
+                "lines": lines,
+                "issues": issues,
+            }
+    except HTTPException:
+        # HTTPException’ları olduğu gibi döndür (409/404 vs.)
+        raise
+    except Exception as e:
+        # 500 yerine kontrollü 400 dön: debug kolaylaşır
+        raise HTTPException(400, f"scenario_price_preview failed: {e}")
 
 
 @router.get("/scenarios/{scenario_id}/price-range")
@@ -495,7 +510,7 @@ def scenario_price_range(
     strict: int = Query(1, description="1=error on missing data, 0=skip and collect issues"),
 ):
     """
-    from (dâhil) → to (hariç) arasındaki her ay için aylık toplamları ve genel toplamı döner.
+    from (dâhil) → to (hariç) arasındaki her ay için aylık toplamları ve genel toplamı döndürür.
     """
     y0, m0 = _parse_ym(from_)
     y1, m1 = _parse_ym(to)

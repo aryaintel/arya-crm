@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { apiGet, apiPost, ApiError } from "../lib/api";
-// import { formatDate } from "../utils/format"; // <- ŞİMDİLİK KALDIRILDI
 
 /** ------------ Backend ile uyumlu tipler ------------ */
 type ScenarioRow = {
@@ -46,7 +45,8 @@ export default function BusinessCasePage() {
     setLoading(true);
     setError(null);
     try {
-      const payload = await apiGet<BusinessCaseDetail>(`/business-cases/${bcId}`);
+      // ✅ backend: /api/business-cases/{id}
+      const payload = await apiGet<BusinessCaseDetail>(`/api/business-cases/${bcId}`);
       setData(payload);
     } catch (e: any) {
       const msg =
@@ -83,7 +83,8 @@ export default function BusinessCasePage() {
       start_date: form.start_date, // "YYYY-MM-DD"
     };
     try {
-      await apiPost("/business-cases/scenarios", body);
+      // ✅ backend: POST /api/business-cases/scenarios
+      await apiPost("/api/business-cases/scenarios", body);
       setOpen(false);
       await fetchBC(); // sadece listeyi yenile
     } catch (e: any) {
@@ -108,7 +109,11 @@ export default function BusinessCasePage() {
         <div>
           <h2 className="text-lg font-medium">Business Case</h2>
           <div className="text-sm text-gray-500">
-            {businessCaseId ? <>ID: <b>{businessCaseId}</b></> : null}
+            {businessCaseId ? (
+              <>
+                ID: <b>{businessCaseId}</b>
+              </>
+            ) : null}
             {data ? (
               <>
                 {" "}
@@ -126,7 +131,7 @@ export default function BusinessCasePage() {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => data && navigate(`/deals/${data.opportunity_id}`)}
-            disabled={!data}
+            disabled={!data || loading}
             className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-50"
             title={data ? "Back to Opportunity" : "Loading…"}
           >
@@ -135,13 +140,15 @@ export default function BusinessCasePage() {
 
           <button
             onClick={fetchBC}
-            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50"
+            disabled={loading}
+            className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-50"
           >
             Refresh
           </button>
           <button
             onClick={onNewScenario}
-            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500"
+            disabled={loading}
+            className="px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500 disabled:opacity-50"
           >
             + New Scenario
           </button>

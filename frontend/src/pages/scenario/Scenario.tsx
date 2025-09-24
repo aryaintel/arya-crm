@@ -1,7 +1,7 @@
 // frontend/src/pages/Scenario/Scenario.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { apiGet, apiPost } from "../../lib/api";
+import { apiGet, ApiError } from "../../lib/api";
 
 // Tabs
 import BOQTable from "../scenario/components/BOQTable";
@@ -11,6 +11,8 @@ import ServicesTable from "../scenario/components/ServicesTable";
 // NEW: FX & TAX
 import FxTab from "../scenario/tabs/FXTab";
 import TaxTab from "../scenario/tabs/TaxTab";
+// NEW: Escalation (preview)
+import EscalationTab from "../scenario/tabs/EscalationTab";
 
 // ---------- Types ----------
 type ScenarioDetail = {
@@ -43,7 +45,8 @@ type Workflow = {
   is_services_ready?: boolean;
 };
 
-type Tab = "pl" | "boq" | "twc" | "capex" | "fx" | "tax" | "services";
+// ✨ escalation eklendi
+type Tab = "pl" | "boq" | "twc" | "capex" | "escalation" | "fx" | "tax" | "services";
 
 // ---------- Utils ----------
 function cls(...a: (string | false | undefined)[]) {
@@ -56,9 +59,17 @@ function fmtDateISO(d: string) {
     return d;
   }
 }
-// backend ile uyum: twc/twc_ready, capex/capex_ready, ...
 function isState(ws: string, key: string) {
   return ws === key || ws === `${key}_ready`;
+}
+function tabBtnClass(active: boolean, disabled?: boolean) {
+  return cls(
+    "px-3 py-1 rounded border text-sm transition-colors focus:outline-none",
+    active
+      ? "bg-indigo-600 text-white border-indigo-600 shadow font-semibold"
+      : "bg-gray-100 text-gray-800 border-gray-300 hover:bg-gray-200",
+    (!active && disabled) && "opacity-50 cursor-not-allowed"
+  );
 }
 
 // ======================================================
@@ -75,7 +86,6 @@ export default function ScenarioPage() {
   // URL param tab (default: boq)
   const tab = ((sp.get("tab") || "boq").toLowerCase() as Tab) ?? "boq";
 
-  // Guard'sız ham sekme değiştirici — Mark Ready akışlarında kullanılır
   function setTabRaw(next: Tab) {
     setSp(
       (prev) => {
@@ -87,7 +97,7 @@ export default function ScenarioPage() {
     );
   }
 
-  // Guard'lı normal sekme geçişi
+  // Escalation serbest; diğerleri workflow guard'lı
   function setTabSafe(next: Tab) {
     if (!flow) {
       setTabRaw(next);
@@ -106,15 +116,15 @@ export default function ScenarioPage() {
       return;
     }
     if (next === "tax" && !flow.is_fx_ready) {
-      alert("Önce 4. FX sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("Önce 5. FX sekmesinde 'Mark Ready' yapmalısınız.");
       return;
     }
     if (next === "services" && !flow.is_tax_ready) {
-      alert("Önce 5. TAX sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("Önce 6. TAX sekmesinde 'Mark Ready' yapmalısınız.");
       return;
     }
     if (next === "pl" && !flow.is_services_ready) {
-      alert("Önce 6. SERVICES sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("Önce 7. SERVICES sekmesinde 'Mark Ready' yapmalısınız.");
       return;
     }
     setTabRaw(next);
@@ -131,7 +141,12 @@ export default function ScenarioPage() {
       setData(sc);
       setFlow(wf);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load scenario.");
+      const msg =
+        (e instanceof ApiError && e.message) ||
+        e?.response?.data?.detail ||
+        e?.message ||
+        "Failed to load scenario.";
+      setErr(String(msg));
       setFlow(null);
     } finally {
       setLoading(false);
@@ -155,22 +170,9 @@ export default function ScenarioPage() {
   const canGoSERVICES = !!flow?.is_tax_ready;
   const canGoPL = !!flow?.is_services_ready;
 
-  // --- Actions (Ready işaretleme) ---
-  async function markServicesReady() {
-    try {
-      await apiPost(`/scenarios/${id}/workflow/mark-services-ready`, {});
-      await loadAll();
-      setTabRaw("pl");
-    } catch (e: any) {
-      alert(e?.message || "Mark Services Ready başarısız.");
-    }
-  }
-
   const ws = (flow?.workflow_state ?? "draft").toString();
   const stateSafe =
-    ws === "ready"
-      ? "READY"
-      : ws.replace("_ready", "").toUpperCase(); // TWC_READY → TWC gibi okunur
+    ws === "ready" ? "READY" : ws.replace("_ready", "").toUpperCase();
 
   return (
     <div className="space-y-4">
@@ -198,18 +200,10 @@ export default function ScenarioPage() {
                 isState(ws, "capex") && "bg-sky-100 text-sky-700",
                 isState(ws, "fx") && "bg-indigo-100 text-indigo-700",
                 isState(ws, "tax") && "bg-rose-100 text-rose-700",
-                // services aşamasında backend çoğunlukla ready yapıyor;
-                // ara renklendirme için flags'a göre göster:
                 flow.is_tax_ready && !flow.is_services_ready && "bg-purple-100 text-purple-700",
                 ws === "ready" && "bg-emerald-100 text-emerald-700"
               )}
-              title={`BOQ:${flow.is_boq_ready ? "✓" : "•"}  TWC:${
-                flow.is_twc_ready ? "✓" : "•"
-              }  CAPEX:${flow.is_capex_ready ? "✓" : "•"}  FX:${
-                flow.is_fx_ready ? "✓" : "•"
-              }  TAX:${flow.is_tax_ready ? "✓" : "•"}  SERVICES:${
-                flow.is_services_ready ? "✓" : "•"
-              }`}
+              title={`BOQ:${flow.is_boq_ready ? "✓" : "•"}  TWC:${flow.is_twc_ready ? "✓" : "•"}  CAPEX:${flow.is_capex_ready ? "✓" : "•"}  FX:${flow.is_fx_ready ? "✓" : "•"}  TAX:${flow.is_tax_ready ? "✓" : "•"}  SERVICES:${flow.is_services_ready ? "✓" : "•"}`}
             >
               State: {stateSafe}
             </span>
@@ -223,14 +217,11 @@ export default function ScenarioPage() {
         </div>
       </div>
 
-      {/* Tabs — sıra: 1→7 */}
+      {/* Tabs — sıra: 1→8 */}
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={() => setTabSafe("boq")}
-          className={cls(
-            "px-3 py-1 rounded border",
-            tab === "boq" ? "bg-amber-50 border-amber-300" : "bg-white"
-          )}
+          className={tabBtnClass(tab === "boq")}
           title="BOQ (Input)"
         >
           1. BOQ
@@ -239,11 +230,7 @@ export default function ScenarioPage() {
         <button
           onClick={() => setTabSafe("twc")}
           disabled={!canGoTWC}
-          className={cls(
-            "px-3 py-1 rounded border",
-            tab === "twc" ? "bg-amber-50 border-amber-300" : "bg-white",
-            !canGoTWC && "opacity-50 cursor-not-allowed"
-          )}
+          className={tabBtnClass(tab === "twc", !canGoTWC)}
           title={!canGoTWC ? "Önce 1. BOQ 'Ready' olmalı" : "TWC (Input)"}
         >
           2. TWC
@@ -252,66 +239,55 @@ export default function ScenarioPage() {
         <button
           onClick={() => setTabSafe("capex")}
           disabled={!canGoCAPEX}
-          className={cls(
-            "px-3 py-1 rounded border",
-            tab === "capex" ? "bg-amber-50 border-amber-300" : "bg-white",
-            !canGoCAPEX && "opacity-50 cursor-not-allowed"
-          )}
+          className={tabBtnClass(tab === "capex", !canGoCAPEX)}
           title={!canGoCAPEX ? "Önce 2. TWC 'Ready' olmalı" : "CAPEX (Input)"}
         >
           3. CAPEX
         </button>
 
+        {/* NEW: Escalation (guard yok) */}
+        <button
+          onClick={() => setTabRaw("escalation")}
+          className={tabBtnClass(tab === "escalation")}
+          title="Escalation (Policies preview & resolve)"
+        >
+          4. Escalation
+        </button>
+
         <button
           onClick={() => setTabSafe("fx")}
           disabled={!canGoFX}
-          className={cls(
-            "px-3 py-1 rounded border",
-            tab === "fx" ? "bg-amber-50 border-amber-300" : "bg-white",
-            !canGoFX && "opacity-50 cursor-not-allowed"
-          )}
+          className={tabBtnClass(tab === "fx", !canGoFX)}
           title={!canGoFX ? "Önce 3. CAPEX 'Ready' olmalı" : "FX (Input)"}
         >
-          4. FX
+          5. FX
         </button>
 
         <button
           onClick={() => setTabSafe("tax")}
           disabled={!canGoTAX}
-          className={cls(
-            "px-3 py-1 rounded border",
-            tab === "tax" ? "bg-amber-50 border-amber-300" : "bg-white",
-            !canGoTAX && "opacity-50 cursor-not-allowed"
-          )}
-          title={!canGoTAX ? "Önce 4. FX 'Ready' olmalı" : "TAX (Input)"}
+          className={tabBtnClass(tab === "tax", !canGoTAX)}
+          title={!canGoTAX ? "Önce 5. FX 'Ready' olmalı" : "TAX (Input)"}
         >
-          5. TAX
+          6. TAX
         </button>
 
         <button
           onClick={() => setTabSafe("services")}
           disabled={!canGoSERVICES}
-          className={cls(
-            "px-3 py-1 rounded border",
-            tab === "services" ? "bg-amber-50 border-amber-300" : "bg-white",
-            !canGoSERVICES && "opacity-50 cursor-not-allowed"
-          )}
-          title={!canGoSERVICES ? "Önce 5. TAX 'Ready' olmalı" : "Services (Input)"}
+          className={tabBtnClass(tab === "services", !canGoSERVICES)}
+          title={!canGoSERVICES ? "Önce 6. TAX 'Ready' olmalı" : "Services (Input)"}
         >
-          6. SERVICES
+          7. SERVICES
         </button>
 
         <button
           onClick={() => setTabSafe("pl")}
           disabled={!canGoPL}
-          className={cls(
-            "px-3 py-1 rounded border",
-            tab === "pl" ? "bg-emerald-50 border-emerald-300" : "bg-white",
-            !canGoPL && "opacity-50 cursor-not-allowed"
-          )}
-          title={!canGoPL ? "Önce 6. SERVICES 'Ready' olmalı" : "P&L (Output)"}
+          className={tabBtnClass(tab === "pl", !canGoPL)}
+          title={!canGoPL ? "Önce 7. SERVICES 'Ready' olmalı" : "P&L (Output)"}
         >
-          7. P&L
+          8. P&L
         </button>
       </div>
 
@@ -356,9 +332,16 @@ export default function ScenarioPage() {
                 onChanged={loadAll}
                 onMarkedReady={async () => {
                   await loadAll();
-                  setTabRaw("fx");
+                  setTabRaw("fx"); // workflow değişmedi
                 }}
               />
+            </div>
+          )}
+
+          {/* NEW: Escalation */}
+          {tab === "escalation" && (
+            <div className="rounded border p-4 bg-white">
+              <EscalationTab scenarioId={id} />
             </div>
           )}
 
@@ -389,25 +372,15 @@ export default function ScenarioPage() {
           )}
 
           {tab === "services" && (
-            <div className="rounded border p-4 bg-white space-y-4">
-              <ServicesTable scenarioId={id} />
-              <div className="flex items-center justify-end">
-                <button
-                  onClick={markServicesReady}
-                  className={cls(
-                    "px-3 py-2 rounded bg-purple-600 text-white hover:bg-purple-700",
-                    flow.is_services_ready && "opacity-60 cursor-not-allowed"
-                  )}
-                  disabled={!!flow.is_services_ready}
-                  title={
-                    flow.is_services_ready
-                      ? "Zaten hazır işaretlenmiş"
-                      : "Services'i Ready olarak işaretle"
-                  }
-                >
-                  Mark Services Ready
-                </button>
-              </div>
+            <div className="rounded border p-4 bg-white">
+              <ServicesTable
+                scenarioId={id}
+                isReady={!!flow.is_services_ready}
+                onMarkedReady={async () => {
+                  await loadAll();
+                  setTabRaw("pl");
+                }}
+              />
             </div>
           )}
 

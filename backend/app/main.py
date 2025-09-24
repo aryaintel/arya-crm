@@ -1,11 +1,10 @@
-# backend/app/main.py
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
 from .api import service_pricing, boq_pricing, formulations_api   # <-- NEW
-
+from .api import escalation as escalation_router
 # Router imports (relative)
 from .api import (
     auth,
@@ -27,7 +26,7 @@ from .api import (
     scenario_tax,
     formulation_links_api,
     index_series_api,
-    escalation_policies_api,         # TAX router
+    escalations_api,      # ✅ ESCALATIONS router (doğru isim)
 )
 
 app = FastAPI(title="Arya CRM API")
@@ -58,12 +57,9 @@ async def ensure_cors_headers(request: Request, call_next):
     resp = await call_next(request)
     origin = request.headers.get("origin")
     if origin and (origin in allow_origins or "*" in allow_origins):
-        # Starlette zaten set etmişse dokunmaz; eksikse tamamlarız
         resp.headers.setdefault("Access-Control-Allow-Origin", origin)
         resp.headers.setdefault("Vary", "Origin")
-        # Authorization/cookies kullanılabilsin
         resp.headers.setdefault("Access-Control-Allow-Credentials", "true")
-        # Ek header'lar (frontend hata ayıklamada faydalı)
         resp.headers.setdefault("Access-Control-Expose-Headers", "*")
     return resp
 
@@ -113,4 +109,5 @@ app.include_router(boq_pricing.router)         # PRICE PREVIEW (boq)
 app.include_router(formulations_api.router)    # FORMULATIONS CRUD
 app.include_router(formulation_links_api.router)
 app.include_router(index_series_api.router)
-app.include_router(escalation_policies_api.router)  # include'lar arasına ekle
+app.include_router(escalations_api.router)     # ✅ ESCALATIONS CRUD
+app.include_router(escalation_router.router)

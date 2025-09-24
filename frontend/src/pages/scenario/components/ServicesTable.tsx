@@ -1,10 +1,10 @@
 // frontend/src/pages/scenario/components/ServicesTable.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
+
 function cls(...a: (string | false | undefined)[]): string {
   return a.filter(Boolean).join(" ");
 }
-
 
 type PaymentTerm = "monthly" | "annual_prepaid" | "one_time";
 type CashOutPolicy = "service_month" | "start_month" | "contract_anniversary";
@@ -53,22 +53,21 @@ type Props = {
   scenarioId: number;
   onMarkedReady?: () => void;
   isReady?: boolean;
-  token?: string; // optional � api helpers zaten local storage'dan aliyor
+  token?: string; // optional — api helpers already read from storage
 };
 
 // ---------------------------------
 
 const paymentTerms: PaymentTerm[] = ["monthly", "annual_prepaid", "one_time"];
-const cashPolicies: CashOutPolicy[] = [
-  "service_month",
-  "start_month",
-  "contract_anniversary",
-];
+const cashPolicies: CashOutPolicy[] = ["service_month", "start_month", "contract_anniversary"];
 const escalationFreqs: EscalationFreq[] = ["annual", "none"];
 
 // ortak gri buton stili
-const BTN =
-  "px-3 py-2 rounded-md bg-gray-200 hover:bg-gray-300 border border-gray-300 text-gray-800";
+const BTN_BASE =
+  "px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed";
+const BTN_PRIMARY =
+  "px-3 py-1.5 rounded-md bg-indigo-600 text-white text-sm hover:bg-indigo-500 disabled:opacity-60 disabled:cursor-not-allowed";
+const BTN_SMALL = "px-2 py-1 rounded border text-sm hover:bg-gray-50";
 
 const emptyRow = (year: number, month: number): ServiceRow => ({
   service_name: "",
@@ -101,7 +100,7 @@ function toNum(v: any, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export default function ServicesTable({ scenarioId }: Props) {
+export default function ServicesTable({ scenarioId, onMarkedReady, isReady }: Props) {
   const [rows, setRows] = useState<ServiceRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -124,7 +123,7 @@ export default function ServicesTable({ scenarioId }: Props) {
       const data = await apiGet<ServiceRow[]>(`${baseUrl}`);
       setRows(Array.isArray(data) ? data : []);
     } catch (e: any) {
-      setErr(e?.message || "Failed to load services.");
+      setErr(e?.response?.data?.detail || e?.message || "Failed to load services.");
       setRows([]);
     } finally {
       setLoading(false);
@@ -153,6 +152,8 @@ export default function ServicesTable({ scenarioId }: Props) {
     if (!editing) return;
     const payload = {
       ...editing,
+      service_name: (editing.service_name || "").trim(),
+      currency: (editing.currency || "").toUpperCase().trim() || "TRY",
       quantity: toNum(editing.quantity, 0),
       unit_cost: toNum(editing.unit_cost, 0),
       escalation_pct: toNum(editing.escalation_pct, 0),
@@ -163,14 +164,9 @@ export default function ServicesTable({ scenarioId }: Props) {
         editing.duration_months === "" || editing.duration_months == null
           ? null
           : toNum(editing.duration_months, 0),
-      end_year:
-        editing.end_year === "" || editing.end_year == null
-          ? null
-          : toNum(editing.end_year, now.y),
-      end_month:
-        editing.end_month === "" || editing.end_month == null
-          ? null
-          : toNum(editing.end_month, now.m),
+      end_year: editing.end_year === "" || editing.end_year == null ? null : toNum(editing.end_year, now.y),
+      end_month: editing.end_month === "" || editing.end_month == null ? null : toNum(editing.end_month, now.m),
+      escalation_freq: toNum(editing.escalation_pct, 0) > 0 ? "annual" : "none",
     };
 
     try {
@@ -182,18 +178,18 @@ export default function ServicesTable({ scenarioId }: Props) {
       closeForm();
       await reload();
     } catch (e: any) {
-      setErr(e?.message || "Failed to save service.");
+      setErr(e?.response?.data?.detail || e?.message || "Failed to save service.");
     }
   }
 
   async function removeRow(id?: number) {
     if (!id) return;
-    if (!confirm("Are you sure you want to delete this service?")) return;
+    if (!confirm("Delete this service?")) return;
     try {
       await apiDelete(`${baseUrl}/${id}`);
       await reload();
     } catch (e: any) {
-      setErr(e?.message || "Failed to delete service.");
+      setErr(e?.response?.data?.detail || e?.message || "Failed to delete service.");
     }
   }
 
@@ -206,60 +202,80 @@ export default function ServicesTable({ scenarioId }: Props) {
       });
       await reload();
     } catch (e: any) {
-      setErr(e?.message || "Failed to update service.");
+      setErr(e?.response?.data?.detail || e?.message || "Failed to update service.");
+    }
+  }
+
+  async function markReady() {
+    if (!confirm("Mark SERVICES as ready and move to P&L?")) return;
+    try {
+      await apiPost(`/scenarios/${scenarioId}/workflow/mark-services-ready`, {});
+      onMarkedReady?.();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || "Cannot mark SERVICES as ready.");
     }
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-xl font-semibold">Services (OPEX)</h3>
-        <div className="flex items-center gap-2">
-          <button onClick={openCreate} className={BTN}>
+        <h3 className="font-semibold text-lg">Services (OPEX)</h3>
+        <div className="flex gap-2">
+          <button onClick={reload} className={BTN_BASE} disabled={loading}>
+            Refresh
+          </button>
+          <button onClick={openCreate} className={BTN_BASE}>
             + New Service
           </button>
-          <button onClick={reload} className={BTN}>
-            Refresh
+          <button
+            onClick={markReady}
+            className={BTN_PRIMARY}
+            disabled={isReady || rows.length === 0}
+            title={
+              isReady
+                ? "Already marked ready"
+                : rows.length === 0
+                ? "Add at least one service first"
+                : "Mark SERVICES as ready and move to P&L"
+            }
+          >
+            Mark SERVICES Ready &rarr; P&L
           </button>
         </div>
       </div>
 
-      {err && (
-        <div className="p-3 rounded-md border border-red-300 bg-red-50 text-red-700">
-          {err}
-        </div>
-      )}
+      {err && <div className="p-3 rounded-md border border-red-300 bg-red-50 text-red-700">{err}</div>}
 
-      <div className="overflow-auto border rounded-xl">
+      <div className="overflow-x-auto border rounded bg-white">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50 text-gray-700">
             <tr>
-              <th className="p-2 text-left">Name</th>
-              <th className="p-2 text-left">Category</th>
-              <th className="p-2 text-left">Vendor</th>
-              <th className="p-2 text-right">Qty</th>
-              <th className="p-2 text-right">Unit Cost</th>
-              <th className="p-2 text-left">Currency</th>
-              <th className="p-2 text-left">Start (Y/M)</th>
-              <th className="p-2 text-left">Duration (mo)</th>
-              <th className="p-2 text-left">Payment</th>
-              <th className="p-2 text-left">Esc.</th>
-              <th className="p-2 text-right">Tax %</th>
-              <th className="p-2 text-center">Active</th>
-              <th className="p-2 text-right">Monthly total</th>
-              <th className="p-2 text-right">Actions</th>
+              <th className="px-3 py-2 text-left">Name</th>
+              <th className="px-3 py-2 text-left">Category</th>
+              <th className="px-3 py-2 text-left">Vendor</th>
+              <th className="px-3 py-2 text-right">Qty</th>
+              <th className="px-3 py-2 text-right">Unit Cost</th>
+              <th className="px-3 py-2 text-left">Currency</th>
+              <th className="px-3 py-2 text-left">Start (Y/M)</th>
+              <th className="px-3 py-2 text-left">Duration (mo)</th>
+              <th className="px-3 py-2 text-left">Payment</th>
+              <th className="px-3 py-2 text-left">Esc.</th>
+              <th className="px-3 py-2 text-right">Tax %</th>
+              <th className="px-3 py-2 text-center">Active</th>
+              <th className="px-3 py-2 text-right">Monthly total</th>
+              <th className="px-3 py-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-3" colSpan={14}>
+                <td className="px-3 py-4 text-center text-gray-500" colSpan={14}>
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td className="p-4 text-gray-500" colSpan={14}>
+                <td className="px-3 py-4 text-center text-gray-500" colSpan={14}>
                   No records yet. Use <b>+ New Service</b> to add.
                 </td>
               </tr>
@@ -267,51 +283,41 @@ export default function ServicesTable({ scenarioId }: Props) {
               rows.map((r) => {
                 const monthly = toNum(r.quantity, 0) * toNum(r.unit_cost, 0);
                 return (
-                  <tr key={r.id} className="border-t">
-                    <td className="p-2">{r.service_name}</td>
-                    <td className="p-2">{r.category}</td>
-                    <td className="p-2">{r.vendor}</td>
-                    <td className="p-2 text-right">{toNum(r.quantity, 0)}</td>
-                    <td className="p-2 text-right">
-                      {toNum(r.unit_cost, 0).toLocaleString(undefined, {
-                        maximumFractionDigits: 2,
-                      })}
+                  <tr key={r.id} className="odd:bg-white even:bg-gray-50 border-t">
+                    <td className="px-3 py-2">{r.service_name}</td>
+                    <td className="px-3 py-2">{r.category}</td>
+                    <td className="px-3 py-2">{r.vendor}</td>
+                    <td className="px-3 py-2 text-right">{toNum(r.quantity, 0)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {toNum(r.unit_cost, 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     </td>
-                    <td className="p-2">{r.currency}</td>
-                    <td className="p-2">
+                    <td className="px-3 py-2">{r.currency}</td>
+                    <td className="px-3 py-2">
                       {toNum(r.start_year, now.y)}/{String(toNum(r.start_month, now.m)).padStart(2, "0")}
                     </td>
-                    <td className="p-2">
-                      {r.duration_months == null || r.duration_months === ""
-                        ? "-"
-                        : toNum(r.duration_months, 0)}
+                    <td className="px-3 py-2">
+                      {r.duration_months == null || r.duration_months === "" ? "—" : toNum(r.duration_months, 0)}
                     </td>
-                    <td className="p-2">{r.payment_term}</td>
-                    <td className="p-2">
-                      {r.escalation_freq === "annual"
-                        ? `${toNum(r.escalation_pct, 0)}% (annual)`
-                        : "-"}
+                    <td className="px-3 py-2">{r.payment_term}</td>
+                    <td className="px-3 py-2">
+                      {r.escalation_freq === "annual" ? `${toNum(r.escalation_pct, 0)}% (annual)` : "—"}
                     </td>
-                    <td className="p-2 text-right">{toNum(r.tax_rate, 0)}</td>
-                    <td className="p-2 text-center">
-                      <input
-                        type="checkbox"
-                        checked={!!r.is_active}
-                        onChange={() => toggleActive(r)}
-                      />
+                    <td className="px-3 py-2 text-right">{toNum(r.tax_rate, 0)}</td>
+                    <td className="px-3 py-2 text-center">
+                      <input type="checkbox" checked={!!r.is_active} onChange={() => toggleActive(r)} />
                     </td>
-                    <td className="p-2 text-right">
-                      {monthly.toLocaleString(undefined, {
-                        maximumFractionDigits: 2,
-                      })}
+                    <td className="px-3 py-2 text-right">
+                      {monthly.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                     </td>
-                    <td className="p-2 text-right space-x-2">
-                      <button className={BTN} onClick={() => openEdit(r)}>
-                        Edit
-                      </button>
-                      <button className={BTN} onClick={() => removeRow(r.id)}>
-                        Delete
-                      </button>
+                    <td className="px-3 py-2">
+                      <div className="flex justify-end gap-2">
+                        <button className={BTN_SMALL} onClick={() => openEdit(r)}>
+                          Edit
+                        </button>
+                        <button className={BTN_SMALL} onClick={() => removeRow(r.id)}>
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -326,10 +332,8 @@ export default function ServicesTable({ scenarioId }: Props) {
         <div className="fixed inset-0 bg-black/30 z-40 flex items-end sm:items-center justify-center">
           <div className="bg-white w-full sm:max-w-3xl rounded-t-2xl sm:rounded-2xl shadow-xl p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h4 className="text-lg font-semibold">
-                {editing.id ? "Edit Service" : "New Service"}
-              </h4>
-              <button className={BTN} onClick={closeForm}>
+              <h4 className="text-lg font-semibold">{editing.id ? "Edit Service" : "New Service"}</h4>
+              <button className={BTN_SMALL} onClick={closeForm}>
                 Close
               </button>
             </div>
@@ -340,9 +344,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <input
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.service_name}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, service_name: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, service_name: e.target.value })}
                 />
               </div>
 
@@ -351,9 +353,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <input
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.category ?? ""}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, category: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, category: e.target.value })}
                 />
               </div>
 
@@ -362,9 +362,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <input
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.vendor ?? ""}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, vendor: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, vendor: e.target.value })}
                 />
               </div>
 
@@ -373,9 +371,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <input
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.unit ?? ""}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, unit: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, unit: e.target.value })}
                 />
               </div>
 
@@ -385,9 +381,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                   inputMode="decimal"
                   className="w-full border rounded-md px-2 py-1 text-right"
                   value={String(editing.quantity ?? "")}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, quantity: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, quantity: e.target.value })}
                 />
               </div>
 
@@ -397,9 +391,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                   inputMode="decimal"
                   className="w-full border rounded-md px-2 py-1 text-right"
                   value={String(editing.unit_cost ?? "")}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, unit_cost: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, unit_cost: e.target.value })}
                 />
               </div>
 
@@ -408,9 +400,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                 <input
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.currency}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, currency: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, currency: e.target.value })}
                 />
               </div>
 
@@ -421,9 +411,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                     inputMode="numeric"
                     className="w-full border rounded-md px-2 py-1"
                     value={String(editing.start_year)}
-                    onChange={(e) =>
-                      setEditing((s) => s && { ...s, start_year: e.target.value })
-                    }
+                    onChange={(e) => setEditing((s) => s && { ...s, start_year: e.target.value })}
                   />
                 </div>
                 <div>
@@ -434,9 +422,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                     max={12}
                     className="w-full border rounded-md px-2 py-1"
                     value={String(editing.start_month)}
-                    onChange={(e) =>
-                      setEditing((s) => s && { ...s, start_month: e.target.value })
-                    }
+                    onChange={(e) => setEditing((s) => s && { ...s, start_month: e.target.value })}
                   />
                 </div>
               </div>
@@ -448,10 +434,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.duration_months ?? ""}
                   onChange={(e) =>
-                    setEditing((s) => s && ({
-                      ...s,
-                      duration_months: e.target.value === "" ? null : e.target.value,
-                    }))
+                    setEditing((s) => s && ({ ...s, duration_months: e.target.value === "" ? null : e.target.value }))
                   }
                 />
               </div>
@@ -464,10 +447,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                     className="w-full border rounded-md px-2 py-1"
                     value={editing.end_year ?? ""}
                     onChange={(e) =>
-                      setEditing((s) => s && ({
-                        ...s,
-                        end_year: e.target.value === "" ? null : e.target.value,
-                      }))
+                      setEditing((s) => s && ({ ...s, end_year: e.target.value === "" ? null : e.target.value }))
                     }
                   />
                 </div>
@@ -480,10 +460,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                     className="w-full border rounded-md px-2 py-1"
                     value={editing.end_month ?? ""}
                     onChange={(e) =>
-                      setEditing((s) => s && ({
-                        ...s,
-                        end_month: e.target.value === "" ? null : e.target.value,
-                      }))
+                      setEditing((s) => s && ({ ...s, end_month: e.target.value === "" ? null : e.target.value }))
                     }
                   />
                 </div>
@@ -495,10 +472,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.payment_term}
                   onChange={(e) =>
-                    setEditing((s) => s && ({
-                      ...s,
-                      payment_term: e.target.value as PaymentTerm,
-                    }))
+                    setEditing((s) => s && ({ ...s, payment_term: e.target.value as PaymentTerm }))
                   }
                 >
                   {paymentTerms.map((x) => (
@@ -515,10 +489,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                   className="w-full border rounded-md px-2 py-1"
                   value={editing.cash_out_month_policy}
                   onChange={(e) =>
-                    setEditing((s) => s && ({
-                      ...s,
-                      cash_out_month_policy: e.target.value as CashOutPolicy,
-                    }))
+                    setEditing((s) => s && ({ ...s, cash_out_month_policy: e.target.value as CashOutPolicy }))
                   }
                 >
                   {cashPolicies.map((x) => (
@@ -551,9 +522,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                   inputMode="decimal"
                   className="w-full border rounded-md px-2 py-1"
                   value={String(editing.tax_rate)}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, tax_rate: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, tax_rate: e.target.value })}
                 />
               </div>
 
@@ -562,9 +531,7 @@ export default function ServicesTable({ scenarioId }: Props) {
                   id="inclTax"
                   type="checkbox"
                   checked={!!editing.expense_includes_tax}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, expense_includes_tax: e.target.checked })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, expense_includes_tax: e.target.checked })}
                 />
                 <label htmlFor="inclTax" className="text-sm">
                   Expense includes tax
@@ -577,18 +544,16 @@ export default function ServicesTable({ scenarioId }: Props) {
                   className="w-full border rounded-md px-2 py-1"
                   rows={3}
                   value={editing.notes ?? ""}
-                  onChange={(e) =>
-                    setEditing((s) => s && { ...s, notes: e.target.value })
-                  }
+                  onChange={(e) => setEditing((s) => s && { ...s, notes: e.target.value })}
                 />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2">
-              <button className={BTN} onClick={closeForm}>
+            <div className="flex justify-end gap-2">
+              <button className={BTN_BASE} onClick={closeForm}>
                 Cancel
               </button>
-              <button className={BTN} onClick={saveForm}>
+              <button className={BTN_PRIMARY} onClick={saveForm}>
                 Save
               </button>
             </div>

@@ -4,8 +4,8 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parents[1] / "app.db"
 
-SERVICE_ID = 1          # -> burada düzenleyin
-FORMULATION_ID = 2      # -> burada düzenleyin
+SERVICE_ID = 2          # -> burada düzenleyin
+FORMULATION_ID = 3      # -> burada düzenleyin
 
 def main():
     cx = sqlite3.connect(str(DB_PATH))
