@@ -113,7 +113,7 @@ async function request<T>(
         ? undefined
         : isFormData
         ? (body as any)
-        : JSON.stringify(body),
+      : JSON.stringify(body),
     signal: controller.signal,
     // Cookie tabanlı oturum kullanıyorsanız yorum kaldırın:
     // credentials: "include",
@@ -190,4 +190,10 @@ export function apiPatch<T>(path: string, body?: unknown, token?: string | null,
 }
 export function apiDelete(path: string, token?: string | null, timeoutMs?: number) {
   return request<void>("DELETE", path, undefined, token, timeoutMs);
+}
+
+/** ---------- Optional helpers ---------- */
+/** Backend 1.0.4'te current user → /me  */
+export function apiMe<T = any>() {
+  return apiGet<T>("/me");
 }

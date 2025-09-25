@@ -1,59 +1,89 @@
+// frontend/src/pages/scenario/tabs/EscalationTab.tsx
 import React, { useEffect, useMemo, useState } from "react";
-import { apiGet } from "../../../lib/api";
+import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
 
 type Props = { scenarioId: number };
 
-/* ==========
-   Types (backend uyumlu olacak şekilde esnek tutuldu)
-   ========== */
-type AppliesTo = "revenue" | "services" | "capex" | "boq" | "all";
-type Frequency = "none" | "monthly" | "annual";
-type Method = "fixed_pct" | "index";
+/* ---------- UI Types (aktif swagger’a göre) ---------- */
+type ScopeUI = "services" | "capex" | "all";
+type Frequency = "monthly" | "quarterly" | "annual";
+type Compounding = "simple" | "compound";
+type MethodView = "fixed" | "index" | "—";
+
+/* DB tarafındaki gerçek değerler */
+type ScopeDB = "price" | "cost" | "both";
+
+/* UI <-> DB map yardımcıları */
+const dbToUiScope = (s?: string | null): ScopeUI => {
+  switch ((s || "").toLowerCase()) {
+    case "price":
+      return "services";
+    case "cost":
+      return "capex";
+    case "both":
+    default:
+      return "all";
+  }
+};
+const uiToDbScope = (s: ScopeUI): ScopeDB => {
+  switch (s) {
+    case "services":
+      return "price";
+    case "capex":
+      return "cost";
+    case "all":
+    default:
+      return "both";
+  }
+};
 
 type EscalationPolicy = {
   id: number;
-  scenario_id?: number;
-
   name: string;
-  applies_to: AppliesTo;        // hangi alana uygulanır
-  method: Method;               // fixed_pct | index
+  /* Coming from DB, but UI'da ScopeUI göstereceğiz */
+  scope?: string | null;
 
-  // fixed
-  fixed_pct?: number | null;    // % cinsinden
+  // method alanı tabloda yok → ekranda türetiyoruz
+  rate_pct?: number | null;
+  index_series_id?: number | null;
 
-  // index tabanlı (örn: CPI-TR, PPI, FX gibi seri kodları)
-  index_code?: string | null;   // serinin kısa kodu
-  base_year?: number | null;
-  base_month?: number | null;   // 1..12
-  step_years?: number | null;   // kaç yılda bir “step”
-  step_months?: number | null;  // kaç ayda bir “step”
+  start_year: number;
+  start_month: number;
 
-  frequency?: Frequency;        // none | monthly | annual
-  is_active: boolean;
+  cap_pct?: number | null;
+  floor_pct?: number | null;
 
-  notes?: string | null;
+  frequency?: Frequency | null;
+  compounding?: Compounding | null;
 };
 
+/* Resolve yanıtı (Swagger: GET /scenarios/{id}/escalation/resolve) */
 type ResolveResp = {
-  // seçili tarih için politika başına katsayı ve/veya efektif % döndüğünü varsayıyoruz
+  year: number;
+  month: number;
   items: Array<{
-    policy_id: number;
     name: string;
-    applies_to: AppliesTo;
-    method: Method;
-    // ekranda göstereceğimiz iki temel çıktı:
-    factor?: number | null;     // katsayı (1.08 gibi)
-    effective_pct?: number | null; // % (8.0 gibi)
-    details?: string | null;       // backend açıklaması (opsiyonel)
+    /* Backend “price|cost|both” dönebilir; UI’da ScopeUI gösterelim */
+    scope: ScopeDB | ScopeUI;
+    method: "fixed" | "index";
+    effective_pct: number;
+    source?: string | null;
+    matched_policy_id?: number | null;
+    factor?: number | null; // opsiyonel gösterim için
+    details?: string | null;
   }>;
 };
 
+/* ---------- Helpers ---------- */
 function cls(...a: (string | false | undefined)[]) {
   return a.filter(Boolean).join(" ");
 }
+const fmt2 = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
 
-const fmt2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
+/* ========== Component ========== */
 export default function EscalationTab({ scenarioId }: Props) {
   const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
   const [loading, setLoading] = useState(false);
@@ -69,7 +99,42 @@ export default function EscalationTab({ scenarioId }: Props) {
   const [resolving, setResolving] = useState(false);
   const [resolved, setResolved] = useState<ResolveResp | null>(null);
 
-  const baseUrl = `/scenarios/${scenarioId}/escalation-policies`;
+  // CRUD modal state
+  type Mode = "create" | "edit";
+  const [modalOpen, setModalOpen] = useState(false);
+  const [mode, setMode] = useState<Mode>("create");
+  const [saving, setSaving] = useState(false);
+  const [formErr, setFormErr] = useState<string | null>(null);
+  const [editId, setEditId] = useState<number | null>(null);
+
+  type Form = {
+    name: string;
+    scope: ScopeUI;
+    method: "fixed" | "index";
+    rate_pct: string;
+    index_series_id: string;
+    start_year: string;
+    start_month: string;
+    frequency: Frequency;
+    compounding: Compounding;
+  };
+
+  const emptyForm: Form = {
+    name: "",
+    scope: "all",
+    method: "fixed",
+    rate_pct: "",
+    index_series_id: "",
+    start_year: String(now.y),
+    start_month: String(now.m),
+    frequency: "annual",
+    compounding: "compound",
+  };
+  const [form, setForm] = useState<Form>(emptyForm);
+
+  // 🔴 Swagger ağacına göre taban URL (GLOBAL policy CRUD)
+  const baseUrl = `/api/escalations/policies`;
+  // ✅ Resolve endpoint Swagger’da mevcut
   const resolveUrl = `/scenarios/${scenarioId}/escalation/resolve`;
 
   async function reload() {
@@ -77,12 +142,12 @@ export default function EscalationTab({ scenarioId }: Props) {
     setErr(null);
     setResolved(null);
     try {
-      // sadece okuma
-      const data = await apiGet<EscalationPolicy[]>(baseUrl);
-      setPolicies(Array.isArray(data) ? data : []);
+      const data = await apiGet<any>(baseUrl);
+      const items: EscalationPolicy[] = Array.isArray(data) ? data : data.items ?? [];
+      setPolicies(items);
     } catch (e: any) {
       setPolicies([]);
-      setErr(e?.response?.data?.detail || e?.message || "Failed to load escalation policies.");
+      setErr(e?.message || "Failed to load escalation policies.");
     } finally {
       setLoading(false);
     }
@@ -98,16 +163,98 @@ export default function EscalationTab({ scenarioId }: Props) {
     setErr(null);
     setResolved(null);
     try {
-      const q = new URLSearchParams({
-        year: String(year),
-        month: String(month),
-      }).toString();
+      const q = new URLSearchParams({ year: String(year), month: String(month) }).toString();
       const data = await apiGet<ResolveResp>(`${resolveUrl}?${q}`);
       setResolved(data);
     } catch (e: any) {
-      setErr(e?.response?.data?.detail || e?.message || "Resolve failed.");
+      setErr(e?.message || "Resolve failed.");
     } finally {
       setResolving(false);
+    }
+  }
+
+  /* ---------- CRUD handlers ---------- */
+  function openCreate() {
+    setMode("create");
+    setFormErr(null);
+    setForm(emptyForm);
+    setEditId(null);
+    setModalOpen(true);
+  }
+
+  function openEdit(p: EscalationPolicy) {
+    setMode("edit");
+    setEditId(p.id);
+    setFormErr(null);
+    const method: "fixed" | "index" = p.rate_pct != null ? "fixed" : "index";
+    setForm({
+      name: p.name,
+      scope: dbToUiScope(p.scope), // DB->UI map
+      method,
+      rate_pct: p.rate_pct != null ? String(p.rate_pct) : "",
+      index_series_id: p.index_series_id != null ? String(p.index_series_id) : "",
+      start_year: String(p.start_year),
+      start_month: String(p.start_month),
+      frequency: (p.frequency ?? "annual") as Frequency,
+      compounding: (p.compounding ?? "compound") as Compounding,
+    });
+    setModalOpen(true);
+  }
+
+  async function saveForm() {
+    setSaving(true);
+    setFormErr(null);
+    try {
+      if (!form.name.trim()) throw new Error("Name is required.");
+      const sy = Number(form.start_year);
+      const sm = Number(form.start_month);
+      if (!Number.isFinite(sy)) throw new Error("Start year is invalid.");
+      if (!Number.isFinite(sm) || sm < 1 || sm > 12) throw new Error("Start month must be 1..12.");
+
+      // Backend: scope = 'both|price|cost'
+      const payload: any = {
+        name: form.name.trim(),
+        scope: uiToDbScope(form.scope), // UI->DB map
+        start_year: sy,
+        start_month: sm,
+        frequency: form.frequency,
+        compounding: form.compounding,
+      };
+
+      if (form.method === "fixed") {
+        const rp = Number(form.rate_pct);
+        if (!Number.isFinite(rp)) throw new Error("Fixed % is required for fixed method.");
+        payload.rate_pct = rp;
+        payload.index_series_id = null;
+      } else {
+        const ix = Number(form.index_series_id);
+        if (!Number.isFinite(ix)) throw new Error("Index series id is required for index method.");
+        payload.index_series_id = ix;
+        payload.rate_pct = null;
+      }
+
+      if (mode === "create") {
+        await apiPost<{ id: number }>(baseUrl, payload);
+      } else {
+        await apiPut(`${baseUrl}/${editId}`, payload);
+      }
+      setModalOpen(false);
+      await reload();
+    } catch (e: any) {
+      setFormErr(e?.message || "Save failed.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deletePolicy(p: EscalationPolicy) {
+    const ok = window.confirm(`Delete '${p.name}' policy?`);
+    if (!ok) return;
+    try {
+      await apiDelete(`${baseUrl}/${p.id}`);
+      await reload();
+    } catch (e: any) {
+      alert(e?.message || "Delete failed.");
     }
   }
 
@@ -117,6 +264,9 @@ export default function EscalationTab({ scenarioId }: Props) {
       <div className="flex items-center justify-between">
         <h3 className="text-xl font-semibold">Escalation (Preview)</h3>
         <div className="flex gap-2">
+          <button onClick={openCreate} className="px-3 py-1.5 rounded-md border text-sm hover:bg-gray-50">
+            Add Policy
+          </button>
           <button
             onClick={reload}
             className={cls(
@@ -130,9 +280,7 @@ export default function EscalationTab({ scenarioId }: Props) {
         </div>
       </div>
 
-      {err && (
-        <div className="p-3 rounded-md border border-red-300 bg-red-50 text-red-700">{err}</div>
-      )}
+      {err && <div className="p-3 rounded-md border border-red-300 bg-red-50 text-red-700">{err}</div>}
 
       {/* Policies table */}
       <div className="overflow-auto border rounded-xl bg-white">
@@ -143,50 +291,60 @@ export default function EscalationTab({ scenarioId }: Props) {
               <th className="p-2 text-left">Scope</th>
               <th className="p-2 text-left">Method</th>
               <th className="p-2 text-right">Fixed %</th>
-              <th className="p-2 text-left">Index Code</th>
+              <th className="p-2 text-left">Index Series</th>
               <th className="p-2 text-left">Base (Y/M)</th>
-              <th className="p-2 text-left">Step (y/m)</th>
               <th className="p-2 text-left">Freq</th>
-              <th className="p-2 text-center">Active</th>
-              <th className="p-2 text-left">Notes</th>
+              <th className="p-2 text-left">Comp.</th>
+              <th className="p-2 text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-3" colSpan={10}>Loading…</td>
+                <td className="p-3" colSpan={9}>
+                  Loading…
+                </td>
               </tr>
             ) : policies.length === 0 ? (
               <tr>
-                <td className="p-4 text-gray-500" colSpan={10}>
+                <td className="p-4 text-gray-500" colSpan={9}>
                   No escalation policies yet.
                 </td>
               </tr>
             ) : (
-              policies.map((p) => (
-                <tr key={p.id} className="border-t">
-                  <td className="p-2">{p.name}</td>
-                  <td className="p-2">{p.applies_to}</td>
-                  <td className="p-2">{p.method}</td>
-                  <td className="p-2 text-right">
-                    {p.method === "fixed_pct" ? fmt2.format(Number(p.fixed_pct ?? 0)) : "—"}
-                  </td>
-                  <td className="p-2">{p.method === "index" ? (p.index_code || "—") : "—"}</td>
-                  <td className="p-2">
-                    {p.base_year && p.base_month ? `${p.base_year}/${String(p.base_month).padStart(2, "0")}` : "—"}
-                  </td>
-                  <td className="p-2">
-                    {(p.step_years ?? 0) || (p.step_months ?? 0)
-                      ? `${p.step_years ?? 0}/${p.step_months ?? 0}`
-                      : "—"}
-                  </td>
-                  <td className="p-2">{p.frequency || "none"}</td>
-                  <td className="p-2 text-center">
-                    <input type="checkbox" checked={!!p.is_active} readOnly />
-                  </td>
-                  <td className="p-2">{p.notes || "—"}</td>
-                </tr>
-              ))
+              policies.map((p) => {
+                const method: MethodView =
+                  p.rate_pct != null ? "fixed" : p.index_series_id != null ? "index" : "—";
+                return (
+                  <tr key={p.id} className="border-t">
+                    <td className="p-2">{p.name}</td>
+                    <td className="p-2">{dbToUiScope(p.scope)}</td>
+                    <td className="p-2">{method}</td>
+                    <td className="p-2 text-right">
+                      {p.rate_pct != null ? fmt2.format(Number(p.rate_pct)) : "—"}
+                    </td>
+                    <td className="p-2">{p.index_series_id != null ? `#${p.index_series_id}` : "—"}</td>
+                    <td className="p-2">
+                      {p.start_year && p.start_month
+                        ? `${p.start_year}/${String(p.start_month).padStart(2, "0")}`
+                        : "—"}
+                    </td>
+                    <td className="p-2">{p.frequency ?? "annual"}</td>
+                    <td className="p-2">{p.compounding ?? "compound"}</td>
+                    <td className="p-2 text-right">
+                      <button className="px-2 py-1 rounded border mr-2 hover:bg-gray-50" onClick={() => openEdit(p)}>
+                        Edit
+                      </button>
+                      <button
+                        className="px-2 py-1 rounded border hover:bg-red-50 text-red-600 border-red-200"
+                        onClick={() => deletePolicy(p)}
+                      >
+                        Delete
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -219,10 +377,7 @@ export default function EscalationTab({ scenarioId }: Props) {
           </div>
           <div className="flex">
             <button
-              className={cls(
-                "ml-auto px-3 py-2 rounded-md border hover:bg-gray-50",
-                resolving && "opacity-60 cursor-progress"
-              )}
+              className={cls("ml-auto px-3 py-2 rounded-md border hover:bg-gray-50", resolving && "opacity-60 cursor-progress")}
               onClick={resolvePolicies}
               disabled={resolving}
             >
@@ -246,20 +401,19 @@ export default function EscalationTab({ scenarioId }: Props) {
               </thead>
               <tbody>
                 {resolved.items?.length ? (
-                  resolved.items.map((it) => (
-                    <tr key={it.policy_id} className="border-t">
-                      <td className="p-2">{it.name}</td>
-                      <td className="p-2">{it.applies_to}</td>
-                      <td className="p-2">{it.method}</td>
-                      <td className="p-2 text-right">
-                        {it.factor == null ? "—" : fmt2.format(it.factor)}
-                      </td>
-                      <td className="p-2 text-right">
-                        {it.effective_pct == null ? "—" : `${fmt2.format(it.effective_pct)} %`}
-                      </td>
-                      <td className="p-2">{it.details || "—"}</td>
-                    </tr>
-                  ))
+                  resolved.items.map((it, idx) => {
+                    const scopeUi = dbToUiScope(it.scope as string);
+                    return (
+                      <tr key={idx} className="border-t">
+                        <td className="p-2">{it.name}</td>
+                        <td className="p-2">{scopeUi}</td>
+                        <td className="p-2">{it.method}</td>
+                        <td className="p-2 text-right">{it.factor == null ? "—" : fmt2.format(it.factor)}</td>
+                        <td className="p-2 text-right">{fmt2.format(it.effective_pct)} %</td>
+                        <td className="p-2">{it.source || it.details || "—"}</td>
+                      </tr>
+                    );
+                  })
                 ) : (
                   <tr>
                     <td className="p-3 text-gray-500" colSpan={6}>
@@ -269,17 +423,160 @@ export default function EscalationTab({ scenarioId }: Props) {
                 )}
               </tbody>
             </table>
-            <div className="mt-2 text-xs text-gray-500">
-              Preview amaçlıdır; sonuçlar politika tanımlarına göre hesaplanır (fixed % veya index bazlı step/frequency).
-            </div>
+            <div className="mt-2 text-xs text-gray-500">Preview amaçlıdır; sonuçlar politika tanımlarına göre hesaplanır.</div>
           </div>
         )}
       </div>
 
-      {/* Bilgi notu */}
       <div className="text-xs text-gray-500">
         Bu sekme yalnızca önizleme/çözümleme amaçlıdır. Servisler/CAPEX üzerinde otomatik değişiklik yapmaz.
       </div>
+
+      {/* ---------- Minimal Modal ---------- */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-40">
+          <div className="absolute inset-0 bg-black/30" onClick={() => !saving && setModalOpen(false)} />
+          <div className="absolute inset-0 grid place-items-center p-4">
+            <div className="w-full max-w-xl bg-white rounded-xl border shadow-md p-4 sm:p-5 z-10">
+              <div className="flex items-center justify-between">
+                <h4 className="text-lg font-semibold">{mode === "create" ? "Add Escalation Policy" : "Edit Escalation Policy"}</h4>
+                <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={() => !saving && setModalOpen(false)}>
+                  Close
+                </button>
+              </div>
+
+              {formErr && (
+                <div className="mt-3 p-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm">{formErr}</div>
+              )}
+
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs text-gray-600">Name</div>
+                  <input
+                    className="border rounded-md px-2 py-1 w-full"
+                    value={form.name}
+                    onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-600">Scope</div>
+                  <select
+                    className="border rounded-md px-2 py-1 w-full"
+                    value={form.scope}
+                    onChange={(e) => setForm({ ...form, scope: e.target.value as ScopeUI })}
+                  >
+                    <option value="all">all</option>
+                    <option value="services">services</option>
+                    <option value="capex">capex</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-600">Method</div>
+                  <select
+                    className="border rounded-md px-2 py-1 w-full"
+                    value={form.method}
+                    onChange={(e) => setForm({ ...form, method: e.target.value as "fixed" | "index" })}
+                  >
+                    <option value="fixed">fixed</option>
+                    <option value="index">index</option>
+                  </select>
+                </div>
+
+                {form.method === "fixed" ? (
+                  <div>
+                    <div className="text-xs text-gray-600">Fixed %</div>
+                    <input
+                      type="number"
+                      step="0.000001"
+                      className="border rounded-md px-2 py-1 w-full"
+                      value={form.rate_pct}
+                      onChange={(e) => setForm({ ...form, rate_pct: e.target.value })}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-xs text-gray-600">Index Series ID</div>
+                    <input
+                      type="number"
+                      className="border rounded-md px-2 py-1 w-full"
+                      value={form.index_series_id}
+                      onChange={(e) => setForm({ ...form, index_series_id: e.target.value })}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <div className="text-xs text-gray-600">Start Year</div>
+                  <input
+                    type="number"
+                    className="border rounded-md px-2 py-1 w-full"
+                    value={form.start_year}
+                    onChange={(e) => setForm({ ...form, start_year: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <div className="text-xs text-gray-600">Start Month</div>
+                  <input
+                    type="number"
+                    min={1}
+                    max={12}
+                    className="border rounded-md px-2 py-1 w-full"
+                    value={form.start_month}
+                    onChange={(e) => setForm({ ...form, start_month: e.target.value })}
+                  />
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-600">Frequency</div>
+                  <select
+                    className="border rounded-md px-2 py-1 w-full"
+                    value={form.frequency}
+                    onChange={(e) => setForm({ ...form, frequency: e.target.value as Frequency })}
+                  >
+                    <option value="annual">annual</option>
+                    <option value="quarterly">quarterly</option>
+                    <option value="monthly">monthly</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="text-xs text-gray-600">Compounding</div>
+                  <select
+                    className="border rounded-md px-2 py-1 w-full"
+                    value={form.compounding}
+                    onChange={(e) => setForm({ ...form, compounding: e.target.value as Compounding })}
+                  >
+                    <option value="compound">compound</option>
+                    <option value="simple">simple</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
+                  onClick={() => !saving && setModalOpen(false)}
+                  disabled={saving}
+                >
+                  Cancel
+                </button>
+                <button
+                  className={cls(
+                    "px-3 py-1.5 rounded-md border bg-indigo-600 text-white hover:bg-indigo-700",
+                    saving && "opacity-70 cursor-progress"
+                  )}
+                  onClick={saveForm}
+                  disabled={saving}
+                >
+                  {mode === "create" ? "Create" : "Save"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

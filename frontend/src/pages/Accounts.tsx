@@ -158,47 +158,6 @@ export default function AccountsPage() {
     setOpen(true);
   };
 
-  const onEdit = (row: Account) => {
-    setEditing(row);
-    setForm({
-      name: row.name || "",
-      industry: row.industry || "",
-      type: row.type || "",
-      website: row.website || "",
-      phone: row.phone || "",
-      billing_address: row.billing_address || "",
-      shipping_address: row.shipping_address || "",
-
-      account_number: row.account_number || "",
-      employees: row.employees != null ? String(row.employees) : "",
-      annual_revenue: row.annual_revenue != null ? String(row.annual_revenue) : "",
-      rating: row.rating || "",
-      ownership: row.ownership || "",
-      description: row.description || "",
-    });
-    setOpen(true);
-  };
-
-  const onDelete = async (row: Account) => {
-    if (!confirm(`Delete account "${row.name}"?`)) return;
-    try {
-      try {
-        await apiDelete(byIdUrl(row.id)); // /accounts/:id/
-      } catch {
-        await apiDelete(byIdUrlNoSlash(row.id)); // /accounts/:id
-      }
-      await fetchAccounts();
-      alert("Deleted.");
-    } catch (e: any) {
-      const msg =
-        (e instanceof ApiError && e.message) ||
-        e?.response?.data?.detail ||
-        e?.message ||
-        "Delete failed";
-      alert(String(msg));
-    }
-  };
-
   const onSave = async () => {
     if (!isValid) return;
 
@@ -294,7 +253,6 @@ export default function AccountsPage() {
                   <th className="py-2 pr-4">Industry</th>
                   <th className="py-2 pr-4">Website</th>
                   <th className="py-2 pr-4">Owner</th>
-                  <th className="py-2 pr-4 w-40 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -321,20 +279,6 @@ export default function AccountsPage() {
                       )}
                     </td>
                     <td className="py-2 pr-4">{a.owner_email ?? "—"}</td>
-                    <td className="py-2 pr-4 text-right">
-                      <button
-                        onClick={() => onEdit(a)}
-                        className="px-2 py-1 rounded border mr-2 hover:bg-gray-50"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => onDelete(a)}
-                        className="px-2 py-1 rounded border hover:bg-gray-50"
-                      >
-                        Delete
-                      </button>
-                    </td>
                   </tr>
                 ))}
               </tbody>
