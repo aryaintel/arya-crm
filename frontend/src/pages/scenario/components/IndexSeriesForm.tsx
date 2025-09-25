@@ -1,5 +1,5 @@
 // frontend/src/pages/scenario/components/IndexSeriesForm.tsx
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   createSeries,
   updateSeries,
@@ -26,6 +26,7 @@ export default function IndexSeriesForm({
   onSaved,
   onCancel,
 }: Props) {
+  // Build the "initial" form model from props
   const initial: IndexSeriesCreate | IndexSeriesUpdate = useMemo(() => {
     if (mode === "edit" && value) {
       const {
@@ -68,9 +69,15 @@ export default function IndexSeriesForm({
     };
   }, [mode, value]);
 
+  // Local form state
   const [form, setForm] = useState<IndexSeriesCreate | IndexSeriesUpdate>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 🔧 KEY FIX: whenever mode/value (i.e., `initial`) changes, reset the form
+  useEffect(() => {
+    setForm(initial);
+  }, [initial]);
 
   const canSubmit =
     !!String((form as IndexSeriesCreate).code || "").trim() &&
