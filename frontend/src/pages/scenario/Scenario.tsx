@@ -11,8 +11,10 @@ import ServicesTable from "../scenario/components/ServicesTable";
 // NEW: FX & TAX
 import FxTab from "../scenario/tabs/FXTab";
 import TaxTab from "../scenario/tabs/TaxTab";
-// NEW: Escalation (preview)
+// NEW: Escalation
 import EscalationTab from "../scenario/tabs/EscalationTab";
+// NEW: Index Series (global data)
+import IndexSeriesTab from "../scenario/tabs/IndexSeriesTab";
 
 // ---------- Types ----------
 type ScenarioDetail = {
@@ -39,14 +41,22 @@ type Workflow = {
   is_boq_ready?: boolean;
   is_twc_ready?: boolean;
   is_capex_ready?: boolean;
-  // NEW:
   is_fx_ready?: boolean;
   is_tax_ready?: boolean;
   is_services_ready?: boolean;
 };
 
-// ✨ escalation eklendi
-type Tab = "pl" | "boq" | "twc" | "capex" | "escalation" | "fx" | "tax" | "services";
+// Tabs (Escalation & Index are ungated)
+type Tab =
+  | "pl"
+  | "boq"
+  | "twc"
+  | "index"
+  | "escalation"
+  | "capex"
+  | "fx"
+  | "tax"
+  | "services";
 
 // ---------- Utils ----------
 function cls(...a: (string | false | undefined)[]) {
@@ -97,34 +107,35 @@ export default function ScenarioPage() {
     );
   }
 
-  // Escalation serbest; diğerleri workflow guard'lı
+  // Escalation & Index are always accessible; others are workflow-guarded
   function setTabSafe(next: Tab) {
     if (!flow) {
       setTabRaw(next);
       return;
     }
     if (next === "twc" && !flow.is_boq_ready) {
-      alert("Önce 1. BOQ sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("First mark 'Ready' in 1. BOQ.");
       return;
     }
     if (next === "capex" && !flow.is_twc_ready) {
-      alert("Önce 2. TWC sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("First mark 'Ready' in 2. TWC.");
       return;
     }
     if (next === "fx" && !flow.is_capex_ready) {
-      alert("Önce 3. CAPEX sekmesinde 'Mark Ready' yapmalısınız.");
+      // CAPEX is now step 5 visually, but it must still be Ready before FX.
+      alert("First mark 'Ready' in 5. CAPEX.");
       return;
     }
     if (next === "tax" && !flow.is_fx_ready) {
-      alert("Önce 5. FX sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("First mark 'Ready' in 6. FX.");
       return;
     }
     if (next === "services" && !flow.is_tax_ready) {
-      alert("Önce 6. TAX sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("First mark 'Ready' in 7. TAX.");
       return;
     }
     if (next === "pl" && !flow.is_services_ready) {
-      alert("Önce 7. SERVICES sekmesinde 'Mark Ready' yapmalısınız.");
+      alert("First mark 'Ready' in 8. SERVICES.");
       return;
     }
     setTabRaw(next);
@@ -217,7 +228,8 @@ export default function ScenarioPage() {
         </div>
       </div>
 
-      {/* Tabs — sıra: 1→8 */}
+      {/* Tabs — new order:
+          1. BOQ, 2. TWC, 3. Index, 4. Escalation, 5. CAPEX, 6. FX, 7. TAX, 8. SERVICES, 9. P&L */}
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={() => setTabSafe("boq")}
@@ -231,63 +243,72 @@ export default function ScenarioPage() {
           onClick={() => setTabSafe("twc")}
           disabled={!canGoTWC}
           className={tabBtnClass(tab === "twc", !canGoTWC)}
-          title={!canGoTWC ? "Önce 1. BOQ 'Ready' olmalı" : "TWC (Input)"}
+          title={!canGoTWC ? "First complete 1. BOQ → Mark Ready." : "TWC (Input)"}
         >
           2. TWC
+        </button>
+
+        {/* NEW: Index (ungated) */}
+        <button
+          onClick={() => setTabRaw("index")}
+          className={tabBtnClass(tab === "index")}
+          title="Index Series (Manage time series data)"
+        >
+          3. Index
+        </button>
+
+        {/* NEW: Escalation (ungated) */}
+        <button
+          onClick={() => setTabRaw("escalation")}
+          className={tabBtnClass(tab === "escalation")}
+          title="Escalation (Policies & resolve)"
+        >
+          4. Escalation
         </button>
 
         <button
           onClick={() => setTabSafe("capex")}
           disabled={!canGoCAPEX}
           className={tabBtnClass(tab === "capex", !canGoCAPEX)}
-          title={!canGoCAPEX ? "Önce 2. TWC 'Ready' olmalı" : "CAPEX (Input)"}
+          title={!canGoCAPEX ? "First complete 2. TWC → Mark Ready." : "CAPEX (Input)"}
         >
-          3. CAPEX
-        </button>
-
-        {/* NEW: Escalation (guard yok) */}
-        <button
-          onClick={() => setTabRaw("escalation")}
-          className={tabBtnClass(tab === "escalation")}
-          title="Escalation (Policies preview & resolve)"
-        >
-          4. Escalation
+          5. CAPEX
         </button>
 
         <button
           onClick={() => setTabSafe("fx")}
           disabled={!canGoFX}
           className={tabBtnClass(tab === "fx", !canGoFX)}
-          title={!canGoFX ? "Önce 3. CAPEX 'Ready' olmalı" : "FX (Input)"}
+          title={!canGoFX ? "First complete 5. CAPEX → Mark Ready." : "FX (Input)"}
         >
-          5. FX
+          6. FX
         </button>
 
         <button
           onClick={() => setTabSafe("tax")}
           disabled={!canGoTAX}
           className={tabBtnClass(tab === "tax", !canGoTAX)}
-          title={!canGoTAX ? "Önce 5. FX 'Ready' olmalı" : "TAX (Input)"}
+          title={!canGoTAX ? "First complete 6. FX → Mark Ready." : "TAX (Input)"}
         >
-          6. TAX
+          7. TAX
         </button>
 
         <button
           onClick={() => setTabSafe("services")}
           disabled={!canGoSERVICES}
           className={tabBtnClass(tab === "services", !canGoSERVICES)}
-          title={!canGoSERVICES ? "Önce 6. TAX 'Ready' olmalı" : "Services (Input)"}
+          title={!canGoSERVICES ? "First complete 7. TAX → Mark Ready." : "Services (Input)"}
         >
-          7. SERVICES
+          8. SERVICES
         </button>
 
         <button
           onClick={() => setTabSafe("pl")}
           disabled={!canGoPL}
           className={tabBtnClass(tab === "pl", !canGoPL)}
-          title={!canGoPL ? "Önce 7. SERVICES 'Ready' olmalı" : "P&L (Output)"}
+          title={!canGoPL ? "First complete 8. SERVICES → Mark Ready." : "P&L (Output)"}
         >
-          8. P&L
+          9. P&L
         </button>
       </div>
 
@@ -319,9 +340,22 @@ export default function ScenarioPage() {
                 scenarioId={id}
                 onMarkedReady={async () => {
                   await loadAll();
+                  // After TWC, users might go CAPEX, but Index/Escalation are free anyway.
                   setTabRaw("capex");
                 }}
               />
+            </div>
+          )}
+
+          {tab === "index" && (
+            <div className="rounded border p-4 bg-white">
+              <IndexSeriesTab />
+            </div>
+          )}
+
+          {tab === "escalation" && (
+            <div className="rounded border p-4 bg-white">
+              <EscalationTab scenarioId={id} />
             </div>
           )}
 
@@ -332,16 +366,9 @@ export default function ScenarioPage() {
                 onChanged={loadAll}
                 onMarkedReady={async () => {
                   await loadAll();
-                  setTabRaw("fx"); // workflow değişmedi
+                  setTabRaw("fx");
                 }}
               />
-            </div>
-          )}
-
-          {/* NEW: Escalation */}
-          {tab === "escalation" && (
-            <div className="rounded border p-4 bg-white">
-              <EscalationTab scenarioId={id} />
             </div>
           )}
 
@@ -388,7 +415,7 @@ export default function ScenarioPage() {
             <div className="rounded border p-6 bg-emerald-50/40">
               <h3 className="font-semibold text-lg mb-2">P&L (coming next)</h3>
               <p className="text-sm text-gray-700">
-                Workflow “READY” aşamasında bu ekranda P&L özetini ve aylık kırılımı göstereceğiz.
+                When the workflow is READY, we’ll display the P&L summary and monthly breakdown here.
               </p>
             </div>
           )}

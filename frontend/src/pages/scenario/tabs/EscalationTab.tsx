@@ -4,72 +4,44 @@ import { apiGet, apiPost, apiPut, apiDelete } from "../../../lib/api";
 
 type Props = { scenarioId: number };
 
-/* ---------- UI Types (aktif swagger’a göre) ---------- */
-type ScopeUI = "services" | "capex" | "all";
+/* ---------- Types (aktif swagger’a göre) ---------- */
+type Scope = "services" | "capex" | "all";
 type Frequency = "monthly" | "quarterly" | "annual";
 type Compounding = "simple" | "compound";
 type MethodView = "fixed" | "index" | "—";
 
-/* DB tarafındaki gerçek değerler */
-type ScopeDB = "price" | "cost" | "both";
-
-/* UI <-> DB map yardımcıları */
-const dbToUiScope = (s?: string | null): ScopeUI => {
-  switch ((s || "").toLowerCase()) {
-    case "price":
-      return "services";
-    case "cost":
-      return "capex";
-    case "both":
-    default:
-      return "all";
-  }
-};
-const uiToDbScope = (s: ScopeUI): ScopeDB => {
-  switch (s) {
-    case "services":
-      return "price";
-    case "capex":
-      return "cost";
-    case "all":
-    default:
-      return "both";
-  }
-};
-
 type EscalationPolicy = {
   id: number;
   name: string;
-  /* Coming from DB, but UI'da ScopeUI göstereceğiz */
-  scope?: string | null;
-
-  // method alanı tabloda yok → ekranda türetiyoruz
+  scope?: Scope | null;
   rate_pct?: number | null;
   index_series_id?: number | null;
-
   start_year: number;
   start_month: number;
-
   cap_pct?: number | null;
   floor_pct?: number | null;
-
   frequency?: Frequency | null;
   compounding?: Compounding | null;
 };
 
-/* Resolve yanıtı (Swagger: GET /scenarios/{id}/escalation/resolve) */
+type IndexSeries = {
+  id: number;
+  code?: string | null;
+  name?: string | null;
+};
+
+/* Resolve yanıtı */
 type ResolveResp = {
   year: number;
   month: number;
   items: Array<{
     name: string;
-    /* Backend “price|cost|both” dönebilir; UI’da ScopeUI gösterelim */
-    scope: ScopeDB | ScopeUI;
+    scope: Scope;
     method: "fixed" | "index";
     effective_pct: number;
     source?: string | null;
     matched_policy_id?: number | null;
-    factor?: number | null; // opsiyonel gösterim için
+    factor?: number | null;
     details?: string | null;
   }>;
 };
@@ -78,16 +50,18 @@ type ResolveResp = {
 function cls(...a: (string | false | undefined)[]) {
   return a.filter(Boolean).join(" ");
 }
-const fmt2 = new Intl.NumberFormat("en-US", {
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
+const fmt2 = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /* ========== Component ========== */
 export default function EscalationTab({ scenarioId }: Props) {
   const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Index series listesi
+  const [series, setSeries] = useState<IndexSeries[]>([]);
+  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [seriesErr, setSeriesErr] = useState<string | null>(null);
 
   // resolve panel state
   const now = useMemo(() => {
@@ -109,7 +83,7 @@ export default function EscalationTab({ scenarioId }: Props) {
 
   type Form = {
     name: string;
-    scope: ScopeUI;
+    scope: Scope;
     method: "fixed" | "index";
     rate_pct: string;
     index_series_id: string;
@@ -118,7 +92,6 @@ export default function EscalationTab({ scenarioId }: Props) {
     frequency: Frequency;
     compounding: Compounding;
   };
-
   const emptyForm: Form = {
     name: "",
     scope: "all",
@@ -132,9 +105,9 @@ export default function EscalationTab({ scenarioId }: Props) {
   };
   const [form, setForm] = useState<Form>(emptyForm);
 
-  // 🔴 Swagger ağacına göre taban URL (GLOBAL policy CRUD)
+  // 🔴 GLOBAL policy CRUD
   const baseUrl = `/api/escalations/policies`;
-  // ✅ Resolve endpoint Swagger’da mevcut
+  // ✅ Resolve endpoint
   const resolveUrl = `/scenarios/${scenarioId}/escalation/resolve`;
 
   async function reload() {
@@ -153,8 +126,24 @@ export default function EscalationTab({ scenarioId }: Props) {
     }
   }
 
+  async function loadSeries() {
+    setSeriesLoading(true);
+    setSeriesErr(null);
+    try {
+      const data = await apiGet<any>("/api/index-series");
+      const items: IndexSeries[] = Array.isArray(data) ? data : data.items ?? [];
+      setSeries(items);
+    } catch (e: any) {
+      setSeries([]);
+      setSeriesErr(e?.message || "Failed to load index series.");
+    } finally {
+      setSeriesLoading(false);
+    }
+  }
+
   useEffect(() => {
     reload();
+    loadSeries();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scenarioId]);
 
@@ -189,7 +178,7 @@ export default function EscalationTab({ scenarioId }: Props) {
     const method: "fixed" | "index" = p.rate_pct != null ? "fixed" : "index";
     setForm({
       name: p.name,
-      scope: dbToUiScope(p.scope), // DB->UI map
+      scope: (p.scope ?? "all") as Scope,
       method,
       rate_pct: p.rate_pct != null ? String(p.rate_pct) : "",
       index_series_id: p.index_series_id != null ? String(p.index_series_id) : "",
@@ -211,10 +200,9 @@ export default function EscalationTab({ scenarioId }: Props) {
       if (!Number.isFinite(sy)) throw new Error("Start year is invalid.");
       if (!Number.isFinite(sm) || sm < 1 || sm > 12) throw new Error("Start month must be 1..12.");
 
-      // Backend: scope = 'both|price|cost'
       const payload: any = {
         name: form.name.trim(),
-        scope: uiToDbScope(form.scope), // UI->DB map
+        scope: form.scope,
         start_year: sy,
         start_month: sm,
         frequency: form.frequency,
@@ -227,8 +215,10 @@ export default function EscalationTab({ scenarioId }: Props) {
         payload.rate_pct = rp;
         payload.index_series_id = null;
       } else {
+        // index method
+        if (!form.index_series_id) throw new Error("Please select an Index Series.");
         const ix = Number(form.index_series_id);
-        if (!Number.isFinite(ix)) throw new Error("Index series id is required for index method.");
+        if (!Number.isFinite(ix) || ix <= 0) throw new Error("Index series id is invalid.");
         payload.index_series_id = ix;
         payload.rate_pct = null;
       }
@@ -241,7 +231,9 @@ export default function EscalationTab({ scenarioId }: Props) {
       setModalOpen(false);
       await reload();
     } catch (e: any) {
-      setFormErr(e?.message || "Save failed.");
+      // 422 gelirse net göster
+      const msg = e?.message || "Save failed.";
+      setFormErr(msg);
     } finally {
       setSaving(false);
     }
@@ -301,15 +293,11 @@ export default function EscalationTab({ scenarioId }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-3" colSpan={9}>
-                  Loading…
-                </td>
+                <td className="p-3" colSpan={9}>Loading…</td>
               </tr>
             ) : policies.length === 0 ? (
               <tr>
-                <td className="p-4 text-gray-500" colSpan={9}>
-                  No escalation policies yet.
-                </td>
+                <td className="p-4 text-gray-500" colSpan={9}>No escalation policies yet.</td>
               </tr>
             ) : (
               policies.map((p) => {
@@ -318,7 +306,7 @@ export default function EscalationTab({ scenarioId }: Props) {
                 return (
                   <tr key={p.id} className="border-t">
                     <td className="p-2">{p.name}</td>
-                    <td className="p-2">{dbToUiScope(p.scope)}</td>
+                    <td className="p-2">{p.scope ?? "all"}</td>
                     <td className="p-2">{method}</td>
                     <td className="p-2 text-right">
                       {p.rate_pct != null ? fmt2.format(Number(p.rate_pct)) : "—"}
@@ -377,7 +365,10 @@ export default function EscalationTab({ scenarioId }: Props) {
           </div>
           <div className="flex">
             <button
-              className={cls("ml-auto px-3 py-2 rounded-md border hover:bg-gray-50", resolving && "opacity-60 cursor-progress")}
+              className={cls(
+                "ml-auto px-3 py-2 rounded-md border hover:bg-gray-50",
+                resolving && "opacity-60 cursor-progress"
+              )}
               onClick={resolvePolicies}
               disabled={resolving}
             >
@@ -401,19 +392,18 @@ export default function EscalationTab({ scenarioId }: Props) {
               </thead>
               <tbody>
                 {resolved.items?.length ? (
-                  resolved.items.map((it, idx) => {
-                    const scopeUi = dbToUiScope(it.scope as string);
-                    return (
-                      <tr key={idx} className="border-t">
-                        <td className="p-2">{it.name}</td>
-                        <td className="p-2">{scopeUi}</td>
-                        <td className="p-2">{it.method}</td>
-                        <td className="p-2 text-right">{it.factor == null ? "—" : fmt2.format(it.factor)}</td>
-                        <td className="p-2 text-right">{fmt2.format(it.effective_pct)} %</td>
-                        <td className="p-2">{it.source || it.details || "—"}</td>
-                      </tr>
-                    );
-                  })
+                  resolved.items.map((it, idx) => (
+                    <tr key={idx} className="border-t">
+                      <td className="p-2">{it.name}</td>
+                      <td className="p-2">{it.scope}</td>
+                      <td className="p-2">{it.method}</td>
+                      <td className="p-2 text-right">
+                        {it.factor == null ? "—" : fmt2.format(it.factor)}
+                      </td>
+                      <td className="p-2 text-right">{fmt2.format(it.effective_pct)} %</td>
+                      <td className="p-2">{it.source || it.details || "—"}</td>
+                    </tr>
+                  ))
                 ) : (
                   <tr>
                     <td className="p-3 text-gray-500" colSpan={6}>
@@ -423,7 +413,9 @@ export default function EscalationTab({ scenarioId }: Props) {
                 )}
               </tbody>
             </table>
-            <div className="mt-2 text-xs text-gray-500">Preview amaçlıdır; sonuçlar politika tanımlarına göre hesaplanır.</div>
+            <div className="mt-2 text-xs text-gray-500">
+              Preview amaçlıdır; sonuçlar politika tanımlarına göre hesaplanır.
+            </div>
           </div>
         )}
       </div>
@@ -439,7 +431,9 @@ export default function EscalationTab({ scenarioId }: Props) {
           <div className="absolute inset-0 grid place-items-center p-4">
             <div className="w-full max-w-xl bg-white rounded-xl border shadow-md p-4 sm:p-5 z-10">
               <div className="flex items-center justify-between">
-                <h4 className="text-lg font-semibold">{mode === "create" ? "Add Escalation Policy" : "Edit Escalation Policy"}</h4>
+                <h4 className="text-lg font-semibold">
+                  {mode === "create" ? "Add Escalation Policy" : "Edit Escalation Policy"}
+                </h4>
                 <button className="px-2 py-1 rounded border hover:bg-gray-50" onClick={() => !saving && setModalOpen(false)}>
                   Close
                 </button>
@@ -447,6 +441,9 @@ export default function EscalationTab({ scenarioId }: Props) {
 
               {formErr && (
                 <div className="mt-3 p-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm">{formErr}</div>
+              )}
+              {seriesErr && (
+                <div className="mt-3 p-2 rounded border border-yellow-300 bg-yellow-50 text-yellow-700 text-sm">{seriesErr}</div>
               )}
 
               <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -464,7 +461,7 @@ export default function EscalationTab({ scenarioId }: Props) {
                   <select
                     className="border rounded-md px-2 py-1 w-full"
                     value={form.scope}
-                    onChange={(e) => setForm({ ...form, scope: e.target.value as ScopeUI })}
+                    onChange={(e) => setForm({ ...form, scope: e.target.value as Scope })}
                   >
                     <option value="all">all</option>
                     <option value="services">services</option>
@@ -477,7 +474,16 @@ export default function EscalationTab({ scenarioId }: Props) {
                   <select
                     className="border rounded-md px-2 py-1 w-full"
                     value={form.method}
-                    onChange={(e) => setForm({ ...form, method: e.target.value as "fixed" | "index" })}
+                    onChange={(e) => {
+                      const v = e.target.value as "fixed" | "index";
+                      // method değişince karşı alanı temizle
+                      setForm({
+                        ...form,
+                        method: v,
+                        rate_pct: v === "fixed" ? form.rate_pct : "",
+                        index_series_id: v === "index" ? form.index_series_id : "",
+                      });
+                    }}
                   >
                     <option value="fixed">fixed</option>
                     <option value="index">index</option>
@@ -497,13 +503,23 @@ export default function EscalationTab({ scenarioId }: Props) {
                   </div>
                 ) : (
                   <div>
-                    <div className="text-xs text-gray-600">Index Series ID</div>
-                    <input
-                      type="number"
+                    <div className="text-xs text-gray-600">Index Series</div>
+                    <select
                       className="border rounded-md px-2 py-1 w-full"
                       value={form.index_series_id}
                       onChange={(e) => setForm({ ...form, index_series_id: e.target.value })}
-                    />
+                      disabled={seriesLoading}
+                    >
+                      <option value="">— select —</option>
+                      {series.map((s) => (
+                        <option key={s.id} value={String(s.id)}>
+                          #{s.id} {s.code ?? ""} {s.name ?? ""}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="text-[11px] text-gray-500 mt-1">
+                      (Listede yoksa önce <b>Index Series</b> bölümünden oluşturun.)
+                    </div>
                   </div>
                 )}
 
@@ -555,11 +571,7 @@ export default function EscalationTab({ scenarioId }: Props) {
               </div>
 
               <div className="mt-4 flex justify-end gap-2">
-                <button
-                  className="px-3 py-1.5 rounded-md border hover:bg-gray-50"
-                  onClick={() => !saving && setModalOpen(false)}
-                  disabled={saving}
-                >
+                <button className="px-3 py-1.5 rounded-md border hover:bg-gray-50" onClick={() => !saving && setModalOpen(false)} disabled={saving}>
                   Cancel
                 </button>
                 <button

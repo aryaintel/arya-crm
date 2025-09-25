@@ -31,7 +31,7 @@ COMP_ALLOWED = {"simple", "compound"}
 
 class PolicyBase(BaseModel):
     name: str
-    scope: Optional[str] = None
+    scope: Optional[str] = None  # UI: all|services|capex  → DB: both|price|cost
 
     # A) Rate-based
     rate_pct: Optional[condecimal(max_digits=9, decimal_places=6)] = None
@@ -50,7 +50,7 @@ class PolicyBase(BaseModel):
     @validator("frequency")
     def _freq_ok(cls, v):
         if v is None: return v
-        v = v.lower()
+        v = v.lower().strip()
         if v not in FREQ_ALLOWED:
             raise ValueError(f"frequency must be one of {sorted(FREQ_ALLOWED)}")
         return v
@@ -58,7 +58,7 @@ class PolicyBase(BaseModel):
     @validator("compounding")
     def _comp_ok(cls, v):
         if v is None: return v
-        v = v.lower()
+        v = v.lower().strip()
         if v not in COMP_ALLOWED:
             raise ValueError(f"compounding must be one of {sorted(COMP_ALLOWED)}")
         return v
@@ -80,7 +80,7 @@ class PolicyCreate(PolicyBase):
 
 class PolicyUpdate(BaseModel):
     name: Optional[str] = None
-    scope: Optional[str] = None
+    scope: Optional[str] = None                 # UI: all|services|capex  → DB: both|price|cost
     rate_pct: Optional[condecimal(max_digits=9, decimal_places=6)] = None
     frequency: Optional[str] = None
     compounding: Optional[str] = None
@@ -93,7 +93,7 @@ class PolicyUpdate(BaseModel):
     @validator("frequency")
     def _freq_ok(cls, v):
         if v is None: return v
-        v = v.lower()
+        v = v.lower().strip()
         if v not in FREQ_ALLOWED:
             raise ValueError(f"frequency must be one of {sorted(FREQ_ALLOWED)}")
         return v
@@ -101,9 +101,9 @@ class PolicyUpdate(BaseModel):
     @validator("compounding")
     def _comp_ok(cls, v):
         if v is None: return v
-        v = v.lower()
-        if v not in COMP_ALLOWED:
-            raise ValueError(f"compounding must be one of {sorted(COMP_ALLOWED)}")
+        v = v.lower().strip()
+        if v not in {"simple","compound"}:
+            raise ValueError("compounding must be 'simple' or 'compound'")
         return v
 
 class ComponentIn(BaseModel):
@@ -117,13 +117,24 @@ class ComponentsReplace(BaseModel):
 
 
 # --------------- helpers ---------------
+_UI_TO_DB_SCOPE = {
+    "all": "both",
+    "services": "price",
+    "capex": "cost",
+}
+_DB_SCOPE_ALLOWED = {"price", "cost", "both"}
+
+def _normalize_scope(v: Optional[str]) -> Optional[str]:
+    if v is None:
+        return None
+    v_l = v.lower().strip()
+    v_m = _UI_TO_DB_SCOPE.get(v_l, v_l)
+    if v_m not in _DB_SCOPE_ALLOWED:
+        raise HTTPException(422, f"scope must be one of {sorted(_UI_TO_DB_SCOPE.keys())} "
+                                 f"(db accepts {sorted(_DB_SCOPE_ALLOWED)})")
+    return v_m
+
 def _validate_mode(cx: sqlite3.Connection, body: PolicyBase | PolicyUpdate, pid: Optional[int] = None):
-    """
-    En az bir mod: A) rate_pct, B) index_series_id veya components.
-    Aynı anda hem rate hem index verilirse hata.
-    PUT için, components kontrolü endpointte; burada sadece rate/index alanlarına bakılır.
-    """
-    # mevcut components var mı (PUT durumunda ve body alanları boş olabilir)
     has_components = False
     if pid is not None:
         has_components = cx.execute(
@@ -139,22 +150,31 @@ def _validate_mode(cx: sqlite3.Connection, body: PolicyBase | PolicyUpdate, pid:
         raise HTTPException(422, "policy must be rate-based OR index-based")
 
 def _check_weights_sum(items: List[ComponentIn]):
-    eps = Decimal("0.01")        # %100 ± 0.01 tol.
+    eps = Decimal("0.01")
     s = sum(Decimal(str(x.weight_pct)) for x in items)
     if abs(s - Decimal("100")) > eps:
         raise HTTPException(422, f"sum(weight_pct) must be 100±0.01, got {s}")
 
-
 def _referenced(cx: sqlite3.Connection, pid: int) -> bool:
     return cx.execute(
-        """
-        SELECT 1 FROM scenario_services WHERE price_escalation_policy_id=? LIMIT 1
-        """, (pid,)
+        "SELECT 1 FROM scenario_services WHERE price_escalation_policy_id=? LIMIT 1", (pid,)
     ).fetchone() or cx.execute(
         "SELECT 1 FROM scenario_boq_items WHERE price_escalation_policy_id=? LIMIT 1", (pid,)
     ).fetchone() or cx.execute(
         "SELECT 1 FROM scenarios WHERE default_price_escalation_policy_id=? LIMIT 1", (pid,)
     ).fetchone()
+
+def _index_exists(cx: sqlite3.Connection, index_id: int) -> bool:
+    return cx.execute("SELECT 1 FROM index_series WHERE id=?", (index_id,)).fetchone() is not None
+
+def _db_supports_simple_compounding(cx: sqlite3.Connection) -> bool:
+    row = cx.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='escalation_policies'"
+    ).fetchone()
+    if not row or not row["sql"]:
+        return False
+    sql = row["sql"].lower()
+    return "simple" in sql and "compounding" in sql
 
 
 # --------------- routes: policies ---------------
@@ -178,6 +198,17 @@ def list_policies(q: Optional[str] = None,
 def create_policy(payload: PolicyCreate):
     with _db() as cx:
         _validate_mode(cx, payload, None)
+
+        db_scope = _normalize_scope(payload.scope)
+
+        comp = (payload.compounding or "").lower().strip() or None
+        if comp == "simple" and not _db_supports_simple_compounding(cx):
+            raise HTTPException(422, "This database build does not support 'simple' compounding. "
+                                     "Please choose 'compound' or migrate schema.")
+
+        if payload.index_series_id is not None and not _index_exists(cx, payload.index_series_id):
+            raise HTTPException(422, f"index_series_id {payload.index_series_id} not found in index_series")
+
         try:
             cur = cx.execute(
                 """
@@ -188,20 +219,29 @@ def create_policy(payload: PolicyCreate):
                 """,
                 (
                     payload.name,
-                    payload.scope,
+                    db_scope,
                     float(payload.rate_pct) if payload.rate_pct is not None else None,
                     payload.index_series_id,
                     payload.start_year,
                     payload.start_month,
                     float(payload.cap_pct) if payload.cap_pct is not None else None,
                     float(payload.floor_pct) if payload.floor_pct is not None else None,
-                    payload.frequency.lower() if payload.frequency else None,
-                    payload.compounding.lower() if payload.compounding else None,
+                    payload.frequency.lower().strip() if payload.frequency else None,
+                    comp,
                 ),
             )
             pid = cur.lastrowid
             return {"id": pid}
         except sqlite3.IntegrityError as e:
+            msg = str(e)
+            if "FOREIGN KEY" in msg and payload.index_series_id is not None:
+                raise HTTPException(422, f"index_series_id {payload.index_series_id} not found in index_series")
+            if "ck_es_scope" in msg:
+                raise HTTPException(422, "scope value violates DB constraint; expected one of "
+                                         f"{sorted(_DB_SCOPE_ALLOWED)}")
+            if "ck_es_comp" in msg:
+                raise HTTPException(422, "compounding value violates DB constraint for this build "
+                                         "(only 'compound' is allowed)")
             raise HTTPException(409, f"db integrity error: {e}")
 
 
@@ -227,16 +267,34 @@ def update_policy(pid: int, payload: PolicyUpdate):
         _ensure_exists(cx, "escalation_policies", pid)
         _validate_mode(cx, payload, pid)
 
+        if payload.scope is not None:
+            payload.scope = _normalize_scope(payload.scope)
+
+        if payload.index_series_id is not None and not _index_exists(cx, payload.index_series_id):
+            raise HTTPException(422, f"index_series_id {payload.index_series_id} not found in index_series")
+
+        comp = (payload.compounding or "").lower().strip() if payload.compounding is not None else None
+        if comp == "simple" and not _db_supports_simple_compounding(cx):
+            raise HTTPException(422, "This database build does not support 'simple' compounding. "
+                                     "Please choose 'compound' or migrate schema.")
+
         fields: List[str] = []
         vals: list = []
-        for col in ("name", "scope", "rate_pct", "index_series_id", "start_year",
-                    "start_month", "cap_pct", "floor_pct", "frequency", "compounding"):
-            val = getattr(payload, col)
+        mapping = {
+            "name": payload.name,
+            "scope": payload.scope,
+            "rate_pct": float(payload.rate_pct) if payload.rate_pct is not None else None,
+            "index_series_id": payload.index_series_id,
+            "start_year": payload.start_year,
+            "start_month": payload.start_month,
+            "cap_pct": float(payload.cap_pct) if payload.cap_pct is not None else None,
+            "floor_pct": float(payload.floor_pct) if payload.floor_pct is not None else None,
+            "frequency": (payload.frequency or "").lower().strip() if payload.frequency is not None else None,
+            "compounding": comp,
+        }
+
+        for col, val in mapping.items():
             if val is not None:
-                if col in {"rate_pct", "cap_pct", "floor_pct"}:
-                    val = float(val)
-                if col in {"frequency", "compounding"} and isinstance(val, str):
-                    val = val.lower()
                 fields.append(f"{col}=?")
                 vals.append(val)
 
@@ -245,6 +303,15 @@ def update_policy(pid: int, payload: PolicyUpdate):
             try:
                 cx.execute(f"UPDATE escalation_policies SET {', '.join(fields)} WHERE id=?", vals)
             except sqlite3.IntegrityError as e:
+                msg = str(e)
+                if "FOREIGN KEY" in msg and payload.index_series_id is not None:
+                    raise HTTPException(422, f"index_series_id {payload.index_series_id} not found in index_series")
+                if "ck_es_scope" in msg:
+                    raise HTTPException(422, "scope value violates DB constraint; expected one of "
+                                             f"{sorted(_DB_SCOPE_ALLOWED)}")
+                if "ck_es_comp" in msg:
+                    raise HTTPException(422, "compounding value violates DB constraint for this build "
+                                             "(only 'compound' is allowed)")
                 raise HTTPException(409, f"db integrity error: {e}")
 
         return {"id": pid, "updated": True}
@@ -278,9 +345,11 @@ def replace_components(pid: int, body: ComponentsReplace = Body(...)):
     with _db() as cx:
         _ensure_exists(cx, "escalation_policies", pid)
         if not body.items:
-            # index-based policy bileşensiz de (tek index) çalışabilir ama
-            # bu endpoint "replace" olduğu için boş listeye izin vermiyoruz.
             raise HTTPException(400, "items must contain at least 1 component")
+
+        for it in body.items:
+            if not _index_exists(cx, it.index_series_id):
+                raise HTTPException(422, f"index_series_id {it.index_series_id} not found in index_series")
 
         _check_weights_sum(body.items)
 
@@ -302,8 +371,10 @@ def replace_components(pid: int, body: ComponentsReplace = Body(...)):
                     ),
                 )
         except sqlite3.IntegrityError as e:
+            msg = str(e)
+            if "FOREIGN KEY" in msg:
+                raise HTTPException(422, "one or more index_series_id not found in index_series")
             raise HTTPException(409, f"db integrity error: {e}")
 
-        # Tekrar mod doğrulama: artık components var → index-based mod
         _validate_mode(cx, PolicyUpdate(index_series_id=None), pid)
         return {"policy_id": pid, "replaced": True}
