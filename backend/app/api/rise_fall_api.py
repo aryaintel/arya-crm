@@ -15,7 +15,6 @@ router = APIRouter(prefix="/business-cases/scenarios", tags=["rise-fall"])
 
 DB_PATH = Path(__file__).resolve().parents[2] / "app.db"
 
-
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
@@ -43,12 +42,11 @@ def _to_int(v):
     except ValueError:
         return None
 
-
 # ------------------------------------------------------------------------------
-# Pydantic Schemas (FE ile uyumlu olacak şekilde isimler ve alanlar)
+# Schemas
 # ------------------------------------------------------------------------------
 class RFComponentIn(BaseModel):
-    index_series_id: int = Field(..., description="Selected global index series id")
+    index_series_id: int = Field(..., description="Global index series id")
     weight_pct: confloat(ge=0, le=100) = 100
     base_ref_year: conint(ge=1900, le=3000)
     base_ref_month: conint(ge=1, le=12)
@@ -58,7 +56,7 @@ class RFComponentIn(BaseModel):
     floor_pct: Optional[confloat(ge=0)] = None
     sort_order: Optional[int] = None
 
-    # FE farklı anahtarlar gönderebilir → normalize et
+    # Normalize FE alternates
     @root_validator(pre=True)
     def _coerce_alt_keys(cls, values):
         # index_series_id: 'index_series', 'series_id'
@@ -75,15 +73,13 @@ class RFComponentIn(BaseModel):
         if values.get("lag_m") is None and values.get("lag") is not None:
             values["lag_m"] = _to_int(values.get("lag"))
 
-        # cap_pct: 'cap'
+        # cap_pct/floor_pct: 'cap'/'floor'
         if values.get("cap_pct") is None and values.get("cap") is not None:
             values["cap_pct"] = _to_float(values.get("cap"))
-
-        # floor_pct: 'floor'
         if values.get("floor_pct") is None and values.get("floor") is not None:
             values["floor_pct"] = _to_float(values.get("floor"))
 
-        # base_ref_year / base_ref_month: 'base_ref' | 'base_ref_ym' | 'base' | 'baseRef'
+        # base_ref_year/month via 'base_ref' | 'base_ref_ym' | 'base' | 'baseRef'
         by = values.get("base_ref_year")
         bm = values.get("base_ref_month")
         if by is None or bm is None:
@@ -104,30 +100,26 @@ class RFComponentIn(BaseModel):
             elif isinstance(alt, (list, tuple)) and len(alt) >= 2:
                 values["base_ref_year"], values["base_ref_month"] = int(alt[0]), int(alt[1])
 
-        # sayı alanlarını string gelirse dönüştür
+        # numeric strings → numbers
         for k in ("weight_pct", "lag_m", "factor", "cap_pct", "floor_pct", "sort_order"):
             if k in values:
                 if k in ("lag_m", "sort_order"):
                     values[k] = _to_int(values[k])
                 else:
                     values[k] = _to_float(values[k])
-
         return values
 
 
 class RiseFallPolicyIn(BaseModel):
-    # Header (Formulation)
-    frequency: str = Field(..., description="Annual | Quarterly | Monthly")
-    compounding: str = Field(..., description="Simple | Compound")
+    frequency: str = Field(..., description="annual | quarterly | monthly")
+    compounding: str = Field(..., description="simple | compound")
     preview_months: conint(gt=0, le=240) = 36
-
-    # FE bazen 'start'/'start_date' stringi yollar → normalize edeceğiz
     start_year: conint(ge=1900, le=3000)
     start_month: conint(ge=1, le=12)
     base_price: Optional[float] = None
-
     components: List[RFComponentIn] = Field(default_factory=list)
 
+    # Accept various 'start' formats
     @root_validator(pre=True)
     def _coerce_start_fields(cls, values):
         sy = values.get("start_year")
@@ -185,16 +177,14 @@ class RiseFallPolicyOut(BaseModel):
     base_price: Optional[float]
     components: List[RFComponentOut]
 
-
 # ------------------------------------------------------------------------------
-# DB Helpers
+# DB helpers
 # ------------------------------------------------------------------------------
 def _conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
-
 
 def _init_db():
     with _conn() as cx:
@@ -239,9 +229,7 @@ def _init_db():
         """
         )
 
-
 _init_db()
-
 
 def _row_to_policy_out(row: sqlite3.Row, comps: List[sqlite3.Row]) -> RiseFallPolicyOut:
     return RiseFallPolicyOut(
@@ -272,10 +260,6 @@ def _row_to_policy_out(row: sqlite3.Row, comps: List[sqlite3.Row]) -> RiseFallPo
         ],
     )
 
-
-# ------------------------------------------------------------------------------
-# Core upsert/get helpers
-# ------------------------------------------------------------------------------
 def _upsert_policy_and_replace_components(
     *, scenario_id: int, scope: str, scope_id: int, payload: RiseFallPolicyIn
 ) -> RiseFallPolicyOut:
@@ -314,6 +298,7 @@ def _upsert_policy_and_replace_components(
                 ),
             )
 
+        # Replace components
         cx.execute("DELETE FROM rise_fall_component WHERE policy_id=?", (policy_id,))
         for i, comp in enumerate(payload.components):
             cx.execute(
@@ -343,7 +328,6 @@ def _upsert_policy_and_replace_components(
         ).fetchall()
         return _row_to_policy_out(pol, comps)
 
-
 def _get_policy(*, scenario_id: int, scope: str, scope_id: int) -> RiseFallPolicyOut:
     _init_db()
     with _conn() as cx:
@@ -358,7 +342,6 @@ def _get_policy(*, scenario_id: int, scope: str, scope_id: int) -> RiseFallPolic
             (pol["id"],),
         ).fetchall()
         return _row_to_policy_out(pol, comps)
-
 
 # ------------------------------------------------------------------------------
 # SERVICE — PUT / GET
@@ -377,7 +360,6 @@ def upsert_service_rise_fall(
         scenario_id=scenario_id, scope="service", scope_id=service_id, payload=payload
     )
 
-
 @router.get(
     "/{scenario_id}/rise-fall/service/{service_id}",
     response_model=RiseFallPolicyOut,
@@ -388,3 +370,31 @@ def get_service_rise_fall(
     service_id: int = FPath(..., ge=1),
 ):
     return _get_policy(scenario_id=scenario_id, scope="service", scope_id=service_id)
+
+# ------------------------------------------------------------------------------
+# BOQ — PUT / GET
+# ------------------------------------------------------------------------------
+@router.put(
+    "/{scenario_id}/rise-fall/boq/{boq_id}",
+    response_model=RiseFallPolicyOut,
+    summary="Upsert Rise & Fall policy for a BOQ row",
+)
+def upsert_boq_rise_fall(
+    scenario_id: int = FPath(..., ge=1),
+    boq_id: int = FPath(..., ge=1),
+    payload: RiseFallPolicyIn = Body(...),
+):
+    return _upsert_policy_and_replace_components(
+        scenario_id=scenario_id, scope="boq", scope_id=boq_id, payload=payload
+    )
+
+@router.get(
+    "/{scenario_id}/rise-fall/boq/{boq_id}",
+    response_model=RiseFallPolicyOut,
+    summary="Get Rise & Fall policy for a BOQ row",
+)
+def get_boq_rise_fall(
+    scenario_id: int = FPath(..., ge=1),
+    boq_id: int = FPath(..., ge=1),
+):
+    return _get_policy(scenario_id=scenario_id, scope="boq", scope_id=boq_id)
