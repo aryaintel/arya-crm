@@ -1,4 +1,3 @@
-// frontend/src/pages/Scenario/Scenario.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { apiGet, ApiError } from "../../lib/api";
@@ -15,6 +14,8 @@ import TaxTab from "../scenario/tabs/TaxTab";
 import EscalationTab from "../scenario/tabs/EscalationTab";
 // NEW: Index Series (global data)
 import IndexSeriesTab from "../scenario/tabs/IndexSeriesTab";
+// NEW: Rise & Fall (formulation)
+import RiseAndFallTab from "../scenario/tabs/RiseAndFallTab";
 
 // ---------- Types ----------
 type ScenarioDetail = {
@@ -46,13 +47,14 @@ type Workflow = {
   is_services_ready?: boolean;
 };
 
-// Tabs (Escalation & Index are ungated)
+// Tabs (Escalation, Index & Rise&Fall are ungated)
 type Tab =
   | "pl"
   | "boq"
   | "twc"
   | "index"
   | "escalation"
+  | "risefall"
   | "capex"
   | "fx"
   | "tax"
@@ -82,6 +84,13 @@ function tabBtnClass(active: boolean, disabled?: boolean) {
   );
 }
 
+// küçük timeout sarmalayıcı
+const withTimeout = <T,>(p: Promise<T>, ms = 8000): Promise<T> =>
+  new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error(`Request timed out in ${ms}ms`)), ms);
+    p.then(v => { clearTimeout(t); res(v); }).catch(e => { clearTimeout(t); rej(e); });
+  });
+
 // ======================================================
 export default function ScenarioPage() {
   const { scenarioId } = useParams<{ scenarioId: string }>();
@@ -107,7 +116,7 @@ export default function ScenarioPage() {
     );
   }
 
-  // Escalation & Index are always accessible; others are workflow-guarded
+  // Escalation, Index & Rise&Fall are always accessible; others are workflow-guarded
   function setTabSafe(next: Tab) {
     if (!flow) {
       setTabRaw(next);
@@ -122,7 +131,6 @@ export default function ScenarioPage() {
       return;
     }
     if (next === "fx" && !flow.is_capex_ready) {
-      // CAPEX is now step 5 visually, but it must still be Ready before FX.
       alert("First mark 'Ready' in 5. CAPEX.");
       return;
     }
@@ -142,30 +150,49 @@ export default function ScenarioPage() {
   }
 
   async function loadAll() {
+    if (!id || Number.isNaN(id)) {
+      setErr("Invalid scenario id.");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setErr(null);
     try {
-      const [sc, wf] = await Promise.all([
-        apiGet<ScenarioDetail>(`/business-cases/scenarios/${id}`),
-        apiGet<Workflow>(`/scenarios/${id}/workflow`),
+      const [scRes, wfRes] = await Promise.allSettled([
+        withTimeout(apiGet<ScenarioDetail>(`/business-cases/scenarios/${id}`), 8000),
+        withTimeout(apiGet<Workflow>(`/scenarios/${id}/workflow`), 8000),
       ]);
-      setData(sc);
-      setFlow(wf);
-    } catch (e: any) {
-      const msg =
-        (e instanceof ApiError && e.message) ||
-        e?.response?.data?.detail ||
-        e?.message ||
-        "Failed to load scenario.";
-      setErr(String(msg));
-      setFlow(null);
+
+      if (scRes.status === "fulfilled") {
+        setData(scRes.value);
+      } else {
+        const e: any = scRes.reason;
+        const msg =
+          (e instanceof ApiError && e.message) ||
+          e?.response?.data?.detail ||
+          e?.message ||
+          "Failed to load scenario.";
+        setErr(String(msg));
+      }
+
+      if (wfRes.status === "fulfilled") {
+        setFlow(wfRes.value);
+      } else {
+        // workflow gelmezse sayfa yine de çalışsın
+        setFlow({ scenario_id: id, workflow_state: "draft" });
+        console.warn("Workflow load failed:", wfRes.reason);
+      }
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    if (id) loadAll();
+    if (id && !Number.isNaN(id)) loadAll();
+    else {
+      setErr("Invalid scenario id.");
+      setLoading(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -228,8 +255,8 @@ export default function ScenarioPage() {
         </div>
       </div>
 
-      {/* Tabs — new order:
-          1. BOQ, 2. TWC, 3. Index, 4. Escalation, 5. CAPEX, 6. FX, 7. TAX, 8. SERVICES, 9. P&L */}
+      {/* Tabs — order:
+          1. BOQ, 2. TWC, 3. Index, 4. Escalation, (ungated) Rise & Fall, 5. CAPEX, 6. FX, 7. TAX, 8. SERVICES, 9. P&L */}
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={() => setTabSafe("boq")}
@@ -264,6 +291,15 @@ export default function ScenarioPage() {
           title="Escalation (Policies & resolve)"
         >
           4. Escalation
+        </button>
+
+        {/* NEW: Rise & Fall (ungated) */}
+        <button
+          onClick={() => setTabRaw("risefall")}
+          className={tabBtnClass(tab === "risefall")}
+          title="Rise & Fall (Formulation)"
+        >
+          Rise & Fall
         </button>
 
         <button
@@ -319,7 +355,8 @@ export default function ScenarioPage() {
         </div>
       )}
 
-      {!loading && data && flow && (
+      {/* flow gelmese de data geldiyse render et */}
+      {!loading && data && (
         <div className="space-y-4">
           {tab === "boq" && (
             <div className="rounded border p-4 bg-white">
@@ -340,7 +377,6 @@ export default function ScenarioPage() {
                 scenarioId={id}
                 onMarkedReady={async () => {
                   await loadAll();
-                  // After TWC, users might go CAPEX, but Index/Escalation are free anyway.
                   setTabRaw("capex");
                 }}
               />
@@ -356,6 +392,12 @@ export default function ScenarioPage() {
           {tab === "escalation" && (
             <div className="rounded border p-4 bg-white">
               <EscalationTab scenarioId={id} />
+            </div>
+          )}
+
+          {tab === "risefall" && (
+            <div className="rounded border p-4 bg-white">
+              <RiseAndFallTab scenarioId={id} />
             </div>
           )}
 
@@ -376,7 +418,7 @@ export default function ScenarioPage() {
             <div className="rounded border p-4 bg-white">
               <FxTab
                 scenarioId={id}
-                isReady={!!flow.is_fx_ready}
+                isReady={!!flow?.is_fx_ready}
                 onMarkedReady={async () => {
                   await loadAll();
                   setTabRaw("tax");
@@ -389,7 +431,7 @@ export default function ScenarioPage() {
             <div className="rounded border p-4 bg-white">
               <TaxTab
                 scenarioId={id}
-                isReady={!!flow.is_tax_ready}
+                isReady={!!flow?.is_tax_ready}
                 onMarkedReady={async () => {
                   await loadAll();
                   setTabRaw("services");
@@ -402,7 +444,7 @@ export default function ScenarioPage() {
             <div className="rounded border p-4 bg-white">
               <ServicesTable
                 scenarioId={id}
-                isReady={!!flow.is_services_ready}
+                isReady={!!flow?.is_services_ready}
                 onMarkedReady={async () => {
                   await loadAll();
                   setTabRaw("pl");
