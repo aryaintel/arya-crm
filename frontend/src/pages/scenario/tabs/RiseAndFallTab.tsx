@@ -16,7 +16,6 @@ type ServiceRow = {
   currency?: string | null;
   start_year?: number | null;
   start_month?: number | null; // 1..12
-  // (Some backends expose product_id here; if not, create+attach will still succeed if BE infers it.)
   product_id?: number | null;
 };
 
@@ -39,9 +38,7 @@ type IndexSeries = {
 type IndexPoint = { year: number; month: number; value: number };
 
 type Frequency = "monthly" | "quarterly" | "annual";
-
 type Compounding = "simple" | "compound";
-
 type Scope = "service" | "boq";
 
 interface FormulationComponent {
@@ -63,7 +60,6 @@ interface RiseFallForm {
   start_ym?: string | null; // optional override
 }
 
-// Chart row
 type PreviewRow = { ym: string; price: number; idx: number };
 
 /* ===================== Helpers ===================== */
@@ -72,27 +68,68 @@ function cls(...a: Array<string | false | undefined>) { return a.filter(Boolean)
 function pad2(n: number) { return String(n).padStart(2, "0"); }
 function ymStr(y: number, m: number) { return `${y}-${pad2(m)}`; }
 function fromYM(s: string): { y: number; m: number } { const [yy, mm] = s.split("-").map(Number); return { y: yy, m: mm }; }
-
 function addMonths(y: number, m: number, k: number): { y: number; m: number } {
   const dt = new Date(y, m - 1, 1);
   dt.setMonth(dt.getMonth() + k);
   return { y: dt.getFullYear(), m: dt.getMonth() + 1 };
 }
-
 function stepsForFrequency(freq: Frequency): number {
   return freq === "monthly" ? 1 : freq === "quarterly" ? 3 : 12;
 }
+const nullableNumber = (v: unknown): number | null => {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
 
-// Preview engine: composite index vs base reference with lag/cap/floor + simple/compound
+/* -------- Payload sanitization (TS-safe, BE-friendly) -------- */
+function sanitizeComponent(c: FormulationComponent) {
+  const out: any = {
+    index_series_id: Number(c.index_series_id),
+    weight_pct: Number(c.weight_pct),
+  };
+  if (c.base_ref_ym && /^\d{4}-\d{2}$/.test(c.base_ref_ym)) out.base_ref_ym = c.base_ref_ym;
+  const lag = nullableNumber(c.lag_months as any);
+  if (lag !== null) out.lag_months = lag;
+  const fac = nullableNumber(c.factor as any);
+  if (fac !== null) out.factor = fac;
+  out.cap_pct = nullableNumber(c.cap_pct as any);
+  out.floor_pct = nullableNumber(c.floor_pct as any);
+  return out;
+}
+
+function sanitizeFormulationPayload(raw: {
+  product_id?: number | null;
+  name?: string | null;
+  code?: string | null;
+  base_price?: number | null;
+  frequency?: Frequency | null;
+  compounding?: Compounding | null;
+  start_ym?: string | null;
+  components: FormulationComponent[];
+}) {
+  const payload: any = {
+    name: raw.name ?? null,
+    base_price: nullableNumber(raw.base_price as any),
+    frequency: raw.frequency ?? "annual",
+    compounding: raw.compounding ?? "simple",
+    start_ym: raw.start_ym && /^\d{4}-\d{2}$/.test(raw.start_ym) ? raw.start_ym : null,
+    components: (raw.components || []).map(sanitizeComponent),
+  };
+  if (raw.product_id) payload.product_id = Number(raw.product_id);
+  if (raw.code) payload.code = String(raw.code);
+  return payload;
+}
+
+/* -------- Preview engine -------- */
 function buildPreview(
   form: RiseFallForm,
-  seriesPointsMap: Map<number, Map<string, number>>, // sid -> (YYYY-MM -> value)
+  seriesPointsMap: Map<number, Map<string, number>>,
   startY: number,
   startM: number
 ): PreviewRow[] {
   const horizon = Math.max(1, form.months || 24);
   const step = stepsForFrequency(form.frequency);
-
   const out: PreviewRow[] = [];
   const basePrice = Number(form.base_price || 0);
   if (!basePrice || form.components.length === 0) return out;
@@ -136,45 +173,33 @@ function buildPreview(
       compVal += val * w * f;
     }
 
-    const baseDeltaPct = baseIndex ? (compVal - baseIndex) / baseIndex : 0; // 0.06 => +6%
+    const baseDeltaPct = baseIndex ? (compVal - baseIndex) / baseIndex : 0;
 
-    // cap/floor across the net delta (simplified)
     const netCap = Math.min(...form.components.map((c) => (c.cap_pct ?? Infinity)), Infinity);
     const netFloor = Math.max(...form.components.map((c) => (c.floor_pct ?? -Infinity)), -Infinity);
     const boundedDeltaPct = Math.min(Math.max(baseDeltaPct * 100, netFloor), netCap);
     const deltaRatio = 1 + (boundedDeltaPct / 100);
 
-    let priceForPoint: number;
-    if (form.compounding === "simple") {
-      priceForPoint = basePrice * deltaRatio;
-    } else {
-      priceForPoint = currentPrice * deltaRatio; // compound from previous
-    }
+    const priceForPoint =
+      form.compounding === "simple" ? basePrice * deltaRatio : currentPrice * deltaRatio;
 
     out.push({ ym, price: Number(priceForPoint.toFixed(4)), idx: Number(compVal.toFixed(4)) });
     currentPrice = priceForPoint;
   }
-
   return out;
 }
 
 /* ===================== Small API helpers (v1.0.7) ===================== */
-// We try the canonical flow (create formulation -> attach) first.
-// If BE requires product_id and doesn't infer it, we gracefully fall back to
-// direct attach or scenario-scoped endpoints.
 
 async function createFormulation(payload: any) {
-  // Preferred endpoint
   return apiPost("/api/formulations", payload);
 }
 async function updateFormulation(fid: number, payload: any) {
   return apiPut(`/api/formulations/${fid}`, payload);
 }
 async function attachFormulationToService(serviceId: number, formulationId: number) {
-  // Preferred attach endpoints (several variants across minor versions)
   try { return await apiPost(`/api/services/${serviceId}/attach-formulation`, { formulation_id: formulationId }); } catch {}
   try { return await apiPost(`/services/${serviceId}/attach-formulation`, { formulation_id: formulationId }); } catch {}
-  // Fallback single-route link shapes
   try { return await apiPost(`/api/formulation-links/service/${serviceId}`, { formulation_id: formulationId }); } catch {}
   return apiPost(`/api/formulation-links`, { scope: "service", item_id: serviceId, formulation_id: formulationId });
 }
@@ -222,7 +247,7 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
     return ym;
   }, [scope, selectedId, services, boqs, form.start_ym]);
 
-  // Derive base price
+  // Derive base price from selection
   useEffect(() => {
     if (scope === "service") {
       const s = services.find((v) => v.id === selectedId);
@@ -235,15 +260,13 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
     }
   }, [scope, selectedId, services, boqs]);
 
-  // Helper: try multiple endpoints until one succeeds
+  // Helper: GET first-success
   async function fetchAny<T = any>(paths: string[]): Promise<T> {
     let lastErr: any = null;
     for (const p of paths) {
       try {
         return await apiGet<T>(p);
-      } catch (e: any) {
-        lastErr = e;
-      }
+      } catch (e: any) { lastErr = e; }
     }
     throw lastErr || new Error("No endpoint matched");
   }
@@ -251,11 +274,7 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
   // Load core data
   useEffect(() => {
     const sid = Number(scenarioId);
-    if (!sid || Number.isNaN(sid)) {
-      setLoading(false);
-      setErr("Invalid scenario id.");
-      return;
-    }
+    if (!sid || Number.isNaN(sid)) { setLoading(false); setErr("Invalid scenario id."); return; }
     (async () => {
       setLoading(true);
       setErr(null);
@@ -286,7 +305,7 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
     })();
   }, [scenarioId]);
 
-  // Load points for series referenced by components
+  // Load points for needed series
   useEffect(() => {
     (async () => {
       const needed = new Set(form.components.map((c) => c.index_series_id).filter(Boolean));
@@ -302,13 +321,11 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
           next.set(sid, mp);
         }
         setPointsBySeries(next);
-      } catch {
-        // ignore
-      }
+      } catch {/* ignore */}
     })();
   }, [form.components, pointsBySeries]);
 
-  // Build preview data
+  // Preview data
   const chartData: PreviewRow[] = useMemo(() => {
     const { y, m } = fromYM(startYM);
     return buildPreview(form, pointsBySeries, y, m);
@@ -336,94 +353,86 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
     return out;
   }, [showSeries, form.components, pointsBySeries, startYM, form.months]);
 
-  // Helper: POST/PUT first-success strategy
+  // POST/PUT first-success
   async function postAny<T = any>(paths: string[], body: any): Promise<T> {
     let lastErr: any = null;
     for (const p of paths) {
-      try {
-        return await apiPost<T>(p, body);
-      } catch (e: any) {
-        lastErr = e;
-      }
+      try { return await apiPost<T>(p, body); } catch (e: any) { lastErr = e; }
     }
     throw lastErr || new Error("No POST endpoint matched");
   }
   async function putAny<T = any>(paths: string[], body: any): Promise<T> {
     let lastErr: any = null;
     for (const p of paths) {
-      try {
-        return await apiPut<T>(p, body);
-      } catch (e: any) {
-        lastErr = e;
-      }
+      try { return await apiPut<T>(p, body); } catch (e: any) { lastErr = e; }
     }
     throw lastErr || new Error("No PUT endpoint matched");
   }
 
-  // Save payload — canonical path then robust fallbacks
+  // Save flow (create+attach -> direct attach -> scenario fallback)
   async function save() {
     if (!selectedId) return alert("Select a row first.");
 
-    // Basic validation: weights
     const wSum = form.components.reduce((s, c) => s + (Number(c.weight_pct) || 0), 0);
     if (Math.abs(wSum - 100) > 0.001) {
       if (!confirm(`Weights sum to ${wSum.toFixed(2)}%, not 100%. Continue?`)) return;
     }
 
-    // Common payload (for attach variants)
-    const attachPayload = {
+    let product_id: number | undefined;
+    if (scope === "service") {
+      const s = services.find((x) => x.id === selectedId);
+      if (s?.product_id) product_id = s.product_id || undefined;
+    } else {
+      const b = boqs.find((x) => x.id === selectedId);
+      if (b?.product_id) product_id = b.product_id || undefined;
+    }
+
+    const normalizedStartYM = (form.start_ym && /^\d{4}-\d{2}$/.test(form.start_ym)) ? form.start_ym : startYM;
+
+    const attachPayload = sanitizeFormulationPayload({
+      name: `RF-${scope}-${selectedId}`,
+      base_price: form.base_price,
       frequency: form.frequency,
       compounding: form.compounding,
-      base_price: form.base_price,
-      start_ym: startYM,
+      start_ym: normalizedStartYM,
       components: form.components,
-    };
+    });
 
-    // ----- 1) Preferred flow: create formulation then attach -----
+    // 1) create + attach
     try {
-      // If the backend needs product_id and doesn't infer it, include it when available
-      let product_id: number | undefined;
-      if (scope === "service") {
-        const s = services.find((x) => x.id === selectedId);
-        if (s?.product_id) product_id = s.product_id || undefined;
-      } else {
-        const b = boqs.find((x) => x.id === selectedId);
-        if (b?.product_id) product_id = b.product_id || undefined;
-      }
-
-      const formulationPayload: any = {
+      const formulationPayload = sanitizeFormulationPayload({
+        product_id,
         name: `RF-${scope}-${selectedId}`,
+        code: `RF-${scope}-${selectedId}`,
         base_price: form.base_price,
         frequency: form.frequency,
         compounding: form.compounding,
-        start_ym: startYM,
+        start_ym: normalizedStartYM,
         components: form.components,
-      };
-      if (product_id) formulationPayload.product_id = product_id;
+      });
 
       const created: any = await createFormulation(formulationPayload);
       const formulation_id = created?.id || created?.data?.id || created?.formulation_id;
       if (!formulation_id) throw new Error("Formulation ID not returned");
 
-      if (scope === "service") {
-        await attachFormulationToService(selectedId, formulation_id);
-      } else {
-        await attachFormulationToBoq(selectedId, formulation_id);
-      }
+      if (scope === "service") await attachFormulationToService(selectedId, formulation_id);
+      else await attachFormulationToBoq(selectedId, formulation_id);
 
       alert("Saved successfully.");
       return;
     } catch (e1: any) {
-      console.warn("create+attach variant failed, trying direct attach…", e1?.message || e1);
+      console.warn("create+attach failed, trying direct attach…", e1?.message || e1);
     }
 
-    // ----- 2) Direct attach to row (some variants accept full structure) -----
+    // 2) Direct attach
     try {
       if (scope === "service") {
         await postAny(
           [
             `/api/services/${selectedId}/formulation`,
             `/services/${selectedId}/formulation`,
+            `/api/services/${selectedId}/rise-fall`,
+            `/services/${selectedId}/rise-fall`,
           ],
           attachPayload
         );
@@ -432,6 +441,8 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
           [
             `/api/boq-items/${selectedId}/formulation`,
             `/boq-items/${selectedId}/formulation`,
+            `/api/boq-items/${selectedId}/rise-fall`,
+            `/boq-items/${selectedId}/rise-fall`,
           ],
           attachPayload
         );
@@ -439,15 +450,19 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
       alert("Saved successfully.");
       return;
     } catch (e2: any) {
-      console.warn("direct attach variant failed, trying scenario fallback…", e2?.message || e2);
+      console.warn("direct attach failed, trying scenario fallback…", e2?.message || e2);
     }
 
-    // ----- 3) Scenario-scoped generic fallback -----
+    // 3) Scenario-scoped fallback
     try {
       await putAny(
         [
           `/api/scenarios/${scenarioId}/rise-fall/${scope}/${selectedId}`,
           `/scenarios/${scenarioId}/rise-fall/${scope}/${selectedId}`,
+          `/api/scenarios/${scenarioId}/${scope}/${selectedId}/rise-fall`,
+          `/scenarios/${scenarioId}/${scope}/${selectedId}/rise-fall`,
+          `/api/business-cases/scenarios/${scenarioId}/rise-fall/${scope}/${selectedId}`,
+          `/business-cases/scenarios/${scenarioId}/rise-fall/${scope}/${selectedId}`,
         ],
         attachPayload
       );
@@ -455,9 +470,8 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
       return;
     } catch (e3: any) {
       console.warn("scenario fallback failed", e3?.message || e3);
+      alert((e3 && (e3.response?.data?.detail || e3.message)) || "Save failed. Please check backend endpoints/logs.");
     }
-
-    alert("Backend save endpoint not available yet. UI config kept locally.");
   }
 
   /* ===================== UI ===================== */
@@ -620,9 +634,13 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
                             }}
                             className="border rounded px-2 py-1 w-full"
                           >
-                            {series.map((s) => (
-                              <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
-                            ))}
+                            {series.length === 0 ? (
+                              <option value={0}>No series</option>
+                            ) : (
+                              series.map((s) => (
+                                <option key={s.id} value={s.id}>{s.code} — {s.name}</option>
+                              ))
+                            )}
                           </select>
                         </td>
                         <td className="p-2">
@@ -767,7 +785,6 @@ export default function RiseAndFallTab({ scenarioId }: Props) {
       ],
     }));
   }
-
   function removeComponent(idx: number) {
     setForm((f) => ({ ...f, components: f.components.filter((_, i) => i !== idx) }));
   }

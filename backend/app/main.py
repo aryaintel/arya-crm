@@ -5,6 +5,7 @@ from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
 from .api import service_pricing, boq_pricing, formulations_api   # <-- NEW
 from .api import escalation as escalation_router
+from app.api.rise_fall_api import router as rise_fall_router
 # Router imports (relative)
 from .api import (
     auth,
@@ -111,3 +112,4 @@ app.include_router(formulation_links_api.router)
 app.include_router(index_series_api.router)
 app.include_router(escalations_api.router)     # ✅ ESCALATIONS CRUD
 app.include_router(escalation_router.router)
+app.include_router(rise_fall_router)
