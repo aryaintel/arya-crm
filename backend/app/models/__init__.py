@@ -1,4 +1,3 @@
-# backend/app/models/__init__.py
 from sqlalchemy import (
     Column,
     Integer,
@@ -25,8 +24,8 @@ Base = declarative_base()
 class Tenant(Base):
     __tablename__ = "tenants"
     id = Column(Integer, primary_key=True, index=True)
-    slug = Column(String, unique=True, nullable=False)  # arya, demo
-    name = Column(String, nullable=False)               # Arya Demo, Şirket Adı
+    slug = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
 
 
 class User(Base):
@@ -40,25 +39,17 @@ class User(Base):
 
     created_at = Column(DateTime, server_default=func.now())
 
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "email", name="uix_user_tenant_email"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "email", name="uix_user_tenant_email"),)
 
 
 class Role(Base):
-    """
-    Basit rol modeli; permissions virgül ayrımlı string:
-    Örn: "accounts:read,accounts:write,contacts:read" veya admin için "*"
-    """
     __tablename__ = "roles"
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
-    name = Column(String, nullable=False)     # admin, sales, support ...
+    name = Column(String, nullable=False)
     permissions = Column(Text, nullable=True)
 
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "name", name="uix_role_tenant_name"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uix_role_tenant_name"),)
 
 
 # =========================
@@ -68,9 +59,9 @@ class IndexSeries(Base):
     __tablename__ = "index_series"
 
     id = Column(Integer, primary_key=True, index=True)
-    code = Column(String(50), nullable=False, unique=True)     # e.g. CPI_TR, DIESEL_TR
+    code = Column(String(50), nullable=False, unique=True)
     name = Column(String(255), nullable=False)
-    unit = Column(String(50), nullable=True)                   # points, TRY/lt ...
+    unit = Column(String(50), nullable=True)
     notes = Column(Text, nullable=True)
 
     points = relationship("IndexPoint", back_populates="series", cascade="all, delete-orphan", lazy="selectin")
@@ -91,6 +82,111 @@ class IndexPoint(Base):
         UniqueConstraint("series_id", "year", "month", name="uix_index_point_unique"),
         CheckConstraint("month >= 1 AND month <= 12", name="ck_index_month"),
         Index("ix_index_points_series", "series_id"),
+    )
+
+
+# =========================
+# PRODUCTS (global, Salesforce benzeri)
+# =========================
+class Product(Base):
+    __tablename__ = "products"
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    uom = Column(String, nullable=True)
+
+    currency = Column(String(3), nullable=False, default="USD")
+    base_price = Column(Numeric(18, 4), nullable=False, default=0)
+    tax_rate_pct = Column(Numeric(9, 4), nullable=True)
+
+    barcode_gtin = Column(String, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+
+    meta_json = Column(Text, nullable=True)  # <-- güvenli isim
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    deleted_at = Column(DateTime, nullable=True)
+
+    attributes = relationship("ProductAttribute", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
+    media = relationship("ProductMedia", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
+    price_entries = relationship("PriceBookEntry", back_populates="product", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("code", name="uix_product_code"),
+        Index("ix_products_active", "is_active"),
+    )
+
+
+class ProductAttribute(Base):
+    __tablename__ = "product_attributes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String, nullable=False)
+    value = Column(String, nullable=True)
+
+    product = relationship("Product", back_populates="attributes", lazy="selectin")
+
+    __table_args__ = (
+        UniqueConstraint("product_id", "name", name="uix_product_attr_unique"),
+        Index("ix_product_attr_product", "product_id"),
+    )
+
+
+class ProductMedia(Base):
+    __tablename__ = "product_media"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String, nullable=True)     # image|pdf|spec|link
+    url = Column(Text, nullable=False)
+    title = Column(String, nullable=True)
+
+    product = relationship("Product", back_populates="media", lazy="selectin")
+
+    __table_args__ = (Index("ix_product_media_product", "product_id"),)
+
+
+class PriceBook(Base):
+    __tablename__ = "price_books"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    currency = Column(String(3), nullable=False, default="USD")
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    is_default = Column(Boolean, nullable=False, default=False, server_default="0")
+
+    created_at = Column(DateTime, nullable=False, server_default=func.now())
+    updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+
+    entries = relationship("PriceBookEntry", back_populates="book", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        Index("ix_price_books_active", "is_active"),
+        Index("ix_price_books_default", "is_default"),
+    )
+
+
+class PriceBookEntry(Base):
+    __tablename__ = "price_book_entries"
+
+    id = Column(Integer, primary_key=True, index=True)
+    price_book_id = Column(Integer, ForeignKey("price_books.id", ondelete="CASCADE"), nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
+
+    valid_from = Column(Date, nullable=True)
+    valid_to = Column(Date, nullable=True)
+
+    list_price = Column(Numeric(18, 4), nullable=False, default=0)
+    discount_pct = Column(Numeric(9, 4), nullable=True)
+
+    book = relationship("PriceBook", back_populates="entries", lazy="selectin")
+    product = relationship("Product", back_populates="price_entries", lazy="selectin")
+
+    __table_args__ = (
+        Index("ix_pbe_book", "price_book_id"),
+        Index("ix_pbe_product", "product_id"),
     )
 
 
@@ -217,10 +313,6 @@ class EscalationPolicyComponent(Base):
 # Scenario-level Escalation Policies (NEW)
 # =========================
 class ScenarioEscalationPolicy(Base):
-    """
-    Senaryoya özgü sade eskalasyon politikası.
-    Frontend Escalation tabındaki kolonlarla bire bir örtüşür.
-    """
     __tablename__ = "scenario_escalation_policies"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -230,15 +322,14 @@ class ScenarioEscalationPolicy(Base):
     scope = Column(String(20), nullable=False, default="all")         # services|capex|all
     method = Column(String(20), nullable=False, default="fixed")      # fixed|index
 
-    fixed_pct = Column(Numeric(8, 4), nullable=True)                  # method=fixed
-    index_code = Column(String(50), nullable=True)                    # method=index
+    fixed_pct = Column(Numeric(8, 4), nullable=True)
+    index_code = Column(String(50), nullable=True)
 
-    base_year = Column(Integer, nullable=True)                        # index baz periyodu (ops.)
+    base_year = Column(Integer, nullable=True)
     base_month = Column(Integer, nullable=True)
 
-    # UI'da "Step (y/m)" var → ay cinsinden saklayalım (12=annual, 3=quarterly, 1=monthly)
     step_per_month = Column(Integer, nullable=True)
-    freq = Column(String(12), nullable=False, default="annual")       # annual|quarterly|monthly
+    freq = Column(String(12), nullable=False, default="annual")
 
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
     notes = Column(Text, nullable=True)
@@ -264,9 +355,9 @@ class ScenarioTWC(Base):
     id = Column(Integer, primary_key=True, index=True)
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    dso_days = Column(Integer, nullable=False, default=45)   # 0..365
-    dpo_days = Column(Integer, nullable=False, default=30)   # 0..365
-    inventory_days = Column(Integer, nullable=True)          # NULL | 0..365
+    dso_days = Column(Integer, nullable=False, default=45)
+    dpo_days = Column(Integer, nullable=False, default=30)
+    inventory_days = Column(Integer, nullable=True)
     notes = Column(Text, nullable=True)
 
     scenario = relationship("Scenario", back_populates="twc", lazy="selectin")
@@ -276,10 +367,7 @@ class ScenarioTWC(Base):
         Index("ix_twc_scenario", "scenario_id"),
         CheckConstraint("dso_days >= 0 AND dso_days <= 365", name="ck_twc_dso_days"),
         CheckConstraint("dpo_days >= 0 AND dpo_days <= 365", name="ck_twc_dpo_days"),
-        CheckConstraint(
-            "(inventory_days IS NULL) OR (inventory_days >= 0 AND inventory_days <= 365)",
-            name="ck_twc_inventory_days",
-        ),
+        CheckConstraint("(inventory_days IS NULL) OR (inventory_days >= 0 AND inventory_days <= 365)", name="ck_twc_inventory_days"),
     )
 
 
@@ -302,8 +390,8 @@ class Account(Base):
     account_number = Column(String(50), nullable=True)
     employees = Column(Integer, nullable=True)
     annual_revenue = Column(Integer, nullable=True)
-    rating = Column(String(20), nullable=True)     # Hot | Warm | Cold
-    ownership = Column(String(20), nullable=True)  # Public | Private | Other
+    rating = Column(String(20), nullable=True)
+    ownership = Column(String(20), nullable=True)
     description = Column(Text, nullable=True)
 
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
@@ -336,30 +424,23 @@ class Contact(Base):
 # Leads
 # =========================
 class Lead(Base):
-    """
-    Lead → henüz Account/Contact/Opportunity'ye dönmemiş aday.
-    Convert sonrası referans id’leri (soft link) saklanır.
-    """
     __tablename__ = "leads"
 
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     owner_id  = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=False)
 
-    # Profil
     name    = Column(String, nullable=False)
     company = Column(String, nullable=True)
     email   = Column(String, nullable=True)
     phone   = Column(String, nullable=True)
     title   = Column(String, nullable=True)
 
-    # Satış niteliği
-    status  = Column(String, nullable=True)   # New, Working, Nurturing, Unqualified, Converted
-    source  = Column(String, nullable=True)   # Referral, Web, Event...
-    rating  = Column(String, nullable=True)   # Hot, Warm, Cold
+    status  = Column(String, nullable=True)
+    source  = Column(String, nullable=True)
+    rating  = Column(String, nullable=True)
     notes   = Column(Text,   nullable=True)
 
-    # Convert meta (soft link)
     converted_account_id     = Column(Integer, ForeignKey("accounts.id", ondelete="SET NULL"), nullable=True)
     converted_opportunity_id = Column(Integer, ForeignKey("opportunities.id", ondelete="SET NULL"), nullable=True)
     converted_at = Column(DateTime, nullable=True)
@@ -390,7 +471,7 @@ class Stage(Base):
     pipeline_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String, nullable=False)
-    order_index = Column(Integer, nullable=False, default=1)  # UI bu adı kullanıyor
+    order_index = Column(Integer, nullable=False, default=1)
     win_probability = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, server_default=func.now())
@@ -432,9 +513,7 @@ class BusinessCase(Base):
     opportunity = relationship("Opportunity", back_populates="business_case", lazy="selectin")
     scenarios = relationship("Scenario", back_populates="business_case", cascade="all, delete-orphan", lazy="selectin")
 
-    __table_args__ = (
-        UniqueConstraint("opportunity_id", name="uix_business_case_opportunity_1to1"),
-    )
+    __table_args__ = (UniqueConstraint("opportunity_id", name="uix_business_case_opportunity_1to1"),)
 
 
 class Scenario(Base):
@@ -445,14 +524,12 @@ class Scenario(Base):
     months = Column(Integer, nullable=False, default=36)
     start_date = Column(Date, nullable=False)
 
-    # Excel sırası (Input tabları): BOQ -> TWC -> CAPEX -> SERVICES -> (Calc) -> P&L
     is_boq_ready       = Column(Boolean, nullable=False, default=False, server_default="0")
     is_twc_ready       = Column(Boolean, nullable=False, default=False, server_default="0")
     is_capex_ready     = Column(Boolean, nullable=False, default=False, server_default="0")
     is_services_ready  = Column(Boolean, nullable=False, default=False, server_default="0")
     workflow_state     = Column(String,  nullable=False, default="draft", server_default="draft")
 
-    # NEW: default escalation policy (price)
     default_price_escalation_policy_id = Column(Integer, ForeignKey("escalation_policies.id", ondelete="SET NULL"), nullable=True)
 
     business_case = relationship("BusinessCase", back_populates="scenarios", lazy="selectin")
@@ -461,17 +538,9 @@ class Scenario(Base):
     boq_items  = relationship("ScenarioBOQItem", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
     capex_items= relationship("ScenarioCapex", backref="scenario", cascade="all, delete-orphan", lazy="selectin")
     services   = relationship("ScenarioService", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
-    # 1:1 TWC
     twc        = relationship("ScenarioTWC", uselist=False, back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
-    # 1:N TAX RULES
     taxes      = relationship("ScenarioTaxRule", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
-    # 1:N ESCALATION POLICIES (NEW)
-    escalation_policies = relationship(
-        "ScenarioEscalationPolicy",
-        cascade="all, delete-orphan",
-        lazy="selectin",
-        backref="scenario",
-    )
+    escalation_policies = relationship("ScenarioEscalationPolicy", cascade="all, delete-orphan", lazy="selectin", backref="scenario")
 
     __table_args__ = (Index("ix_scenarios_bc", "business_case_id"),)
 
@@ -524,11 +593,10 @@ class ScenarioCapex(Base):
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
     year = Column(Integer, nullable=False)
-    month = Column(Integer, nullable=False)  # 1..12
+    month = Column(Integer, nullable=False)
     amount = Column(Numeric(18, 2), nullable=False, default=0)
     notes = Column(Text, nullable=True)
 
-    # V2
     asset_name = Column(String, nullable=True)
     category = Column(String, nullable=True)
     service_start_year = Column(Integer, nullable=True)
@@ -538,7 +606,6 @@ class ScenarioCapex(Base):
     salvage_value = Column(Numeric(18, 2), nullable=True, default=0)
     is_active = Column(Boolean, nullable=True, default=True)
 
-    # V3
     disposal_year = Column(Integer, nullable=True)
     disposal_month = Column(Integer, nullable=True)
     disposal_proceeds = Column(Numeric(18, 2), nullable=True, default=0)
@@ -550,7 +617,7 @@ class ScenarioCapex(Base):
 
 
 # =========================
-# Scenario: BOQ (Bill of Quantities)
+# Scenario: BOQ
 # =========================
 class ScenarioBOQItem(Base):
     __tablename__ = "scenario_boq_items"
@@ -558,19 +625,18 @@ class ScenarioBOQItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    section = Column(String(50), nullable=True)          # Örn: "AN", "EM"
+    section = Column(String(50), nullable=True)
     item_name = Column(String(255), nullable=False)
-    unit = Column(String(50), nullable=False)            # ton, m3, adet...
+    unit = Column(String(50), nullable=False)
     quantity = Column(Numeric(18, 4), nullable=False, default=0)
     unit_price = Column(Numeric(18, 4), nullable=False, default=0)
     unit_cogs = Column(Numeric(18, 4), nullable=True)
 
-    frequency = Column(String(20), nullable=False, default="once")  # once|monthly|per_shipment|per_tonne
+    frequency = Column(String(20), nullable=False, default="once")
     start_year = Column(Integer, nullable=True)
-    start_month = Column(Integer, nullable=True)         # 1..12
-    months = Column(Integer, nullable=True)              # monthly ise kaç ay
+    start_month = Column(Integer, nullable=True)
+    months = Column(Integer, nullable=True)
 
-    # NEW: pricing via formulation + policy
     formulation_id = Column(Integer, ForeignKey("product_formulations.id", ondelete="SET NULL"), nullable=True)
     price_escalation_policy_id = Column(Integer, ForeignKey("escalation_policies.id", ondelete="SET NULL"), nullable=True)
 
@@ -582,10 +648,7 @@ class ScenarioBOQItem(Base):
     scenario = relationship("Scenario", back_populates="boq_items", lazy="selectin")
 
     __table_args__ = (
-        CheckConstraint(
-            "category IN ('bulk_with_freight','bulk_ex_freight','freight')",
-            name="ck_boq_category",
-        ),
+        CheckConstraint("category IN ('bulk_with_freight','bulk_ex_freight','freight')", name="ck_boq_category"),
         Index("ix_boq_scenario", "scenario_id"),
     )
 
@@ -599,44 +662,36 @@ class ScenarioService(Base):
     id = Column(Integer, primary_key=True, index=True)
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    # Temel bilgiler
     service_name = Column(String, nullable=False)
     category = Column(String, nullable=True)
     vendor = Column(String, nullable=True)
     unit = Column(String, nullable=True)
 
-    # Fiyat / miktar
     quantity = Column(Numeric(18, 4), nullable=False, default=1)
     unit_cost = Column(Numeric(18, 4), nullable=False, default=0)
     currency = Column(String(3), nullable=False, default="TRY")
 
-    # Zamanlama
     start_year = Column(Integer, nullable=False)
     start_month = Column(Integer, nullable=False)
     duration_months = Column(Integer, nullable=True)
     end_year = Column(Integer, nullable=True)
     end_month = Column(Integer, nullable=True)
 
-    # Ödeme & Nakit
-    payment_term = Column(String, nullable=False, default="monthly")  # 'monthly' | 'annual_prepaid' | 'one_time'
-    cash_out_month_policy = Column(String, nullable=False, default="service_month")  # 'service_month' | 'start_month' | 'contract_anniversary'
+    payment_term = Column(String, nullable=False, default="monthly")
+    cash_out_month_policy = Column(String, nullable=False, default="service_month")
 
-    # Endeks / Artış (legacy)
     escalation_pct = Column(Numeric(8, 4), nullable=False, default=0)
-    escalation_freq = Column(String, nullable=False, default="none")  # 'annual' | 'none'
+    escalation_freq = Column(String, nullable=False, default="none")
 
-    # Vergi
     tax_rate = Column(Numeric(8, 4), nullable=False, default=0)
     expense_includes_tax = Column(Boolean, nullable=False, default=False, server_default="0")
 
-    # Diğer
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    # NEW: pricing via formulation + policy
     formulation_id = Column(Integer, ForeignKey("product_formulations.id", ondelete="SET NULL"), nullable=True)
     price_escalation_policy_id = Column(Integer, ForeignKey("escalation_policies.id", ondelete="SET NULL"), nullable=True)
 
@@ -645,10 +700,7 @@ class ScenarioService(Base):
 
     __table_args__ = (
         CheckConstraint("payment_term IN ('monthly','annual_prepaid','one_time')", name="ck_services_payment_term"),
-        CheckConstraint(
-            "cash_out_month_policy IN ('service_month','start_month','contract_anniversary')",
-            name="ck_services_cash_out_policy",
-        ),
+        CheckConstraint("cash_out_month_policy IN ('service_month','start_month','contract_anniversary')", name="ck_services_cash_out_policy"),
         CheckConstraint("escalation_freq IN ('annual','none')", name="ck_services_escalation_freq"),
         Index("ix_services_scenario", "scenario_id"),
         Index("ix_services_active", "is_active"),
@@ -684,15 +736,15 @@ class ScenarioFXRate(Base):
     id = Column(Integer, primary_key=True, index=True)
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    currency = Column(String(3), nullable=False)  # ISO-4217, örn: USD, EUR
-    rate_to_base = Column(Numeric(18, 6), nullable=False, default=1)  # Base currency’e oran
+    currency = Column(String(3), nullable=False)
+    rate_to_base = Column(Numeric(18, 6), nullable=False, default=1)
 
     start_year = Column(Integer, nullable=False)
-    start_month = Column(Integer, nullable=False)  # 1..12
+    start_month = Column(Integer, nullable=False)
     end_year = Column(Integer, nullable=True)
     end_month = Column(Integer, nullable=True)
 
-    source = Column(String(50), nullable=True)  # manual | cbrt | ecb | oanda ...
+    source = Column(String(50), nullable=True)
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
 
@@ -716,17 +768,17 @@ class ScenarioTaxRule(Base):
     id = Column(Integer, primary_key=True, index=True)
     scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
 
-    name = Column(String(100), nullable=False)  # örn: KDV, Stopaj, Kurumlar Vergisi
-    tax_type = Column(String(20), nullable=False, default="custom")  # vat|withholding|corp|custom
-    applies_to = Column(String(20), nullable=False, default="all")   # revenue|services|capex|profit|all
+    name = Column(String(100), nullable=False)
+    tax_type = Column(String(20), nullable=False, default="custom")
+    applies_to = Column(String(20), nullable=False, default="all")
 
-    rate_pct = Column(Numeric(8, 4), nullable=False, default=0)  # yüzde
+    rate_pct = Column(Numeric(8, 4), nullable=False, default=0)
     start_year = Column(Integer, nullable=False)
     start_month = Column(Integer, nullable=False)
     end_year = Column(Integer, nullable=True)
     end_month = Column(Integer, nullable=True)
 
-    is_inclusive = Column(Boolean, nullable=False, default=False, server_default="0")  # fiyatlara dahil mi
+    is_inclusive = Column(Boolean, nullable=False, default=False, server_default="0")
     notes = Column(Text, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
 

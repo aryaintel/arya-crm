@@ -3,10 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .core.config import settings
 from .api.deps import get_current_user, CurrentUser
-from .api import service_pricing, boq_pricing, formulations_api   # <-- NEW
+
+# --- mevcut router importları ---
+from .api import service_pricing, boq_pricing, formulations_api
 from .api import escalation as escalation_router
 from app.api.rise_fall_api import router as rise_fall_router
-# Router imports (relative)
 from .api import (
     auth,
     accounts,
@@ -27,8 +28,11 @@ from .api import (
     scenario_tax,
     formulation_links_api,
     index_series_api,
-    escalations_api,      # ✅ ESCALATIONS router (doğru isim)
+    escalations_api,      # ✅ ESCALATIONS router
 )
+
+# --- NEW: Products API router (CRUD + price books) ---
+from .api.products_api import router as products_router
 
 app = FastAPI(title="Arya CRM API")
 
@@ -48,11 +52,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=True,
-    allow_methods=["*"],     # OPTIONS dahil
-    allow_headers=["*"],     # Authorization dahil
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# 2) Garantör katman: HER yanıta CORS header'ı ekle (ör. auth/exception, 401/404/500 dahil)
+# 2) Garantör katman: HER yanıta CORS header'ı ekle (401/404/500 dahil)
 @app.middleware("http")
 async def ensure_cors_headers(request: Request, call_next):
     resp = await call_next(request)
@@ -96,20 +100,23 @@ app.include_router(business_cases.router)
 
 # Inputs
 app.include_router(boq.router)                 # BOQ
-app.include_router(twc.router)                 # TWC (only this)
+app.include_router(twc.router)                 # TWC
 app.include_router(scenario_capex.router)      # CAPEX
 app.include_router(scenario_services.router)   # SERVICES (OPEX)
 app.include_router(scenario_overheads.router)  # Overheads
 app.include_router(scenario_fx.router)         # FX
 app.include_router(scenario_tax.router)        # TAX
 
-# Workflow
+# Workflow & pricing/escalation
 app.include_router(workflow.router)
 app.include_router(service_pricing.router)     # PRICE PREVIEW (service)
 app.include_router(boq_pricing.router)         # PRICE PREVIEW (boq)
 app.include_router(formulations_api.router)    # FORMULATIONS CRUD
 app.include_router(formulation_links_api.router)
 app.include_router(index_series_api.router)
-app.include_router(escalations_api.router)     # ✅ ESCALATIONS CRUD
+app.include_router(escalations_api.router)     # ESCALATIONS CRUD
 app.include_router(escalation_router.router)
 app.include_router(rise_fall_router)
+
+# --- NEW: Products & Price Books ---
+app.include_router(products_router)

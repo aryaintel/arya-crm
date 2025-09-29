@@ -31,6 +31,9 @@ import BusinessCasePage from "./pages/BusinessCase";
 // Tabs’lı senaryo sayfası
 import ScenarioPage from "./pages/scenario/Scenario";
 
+// NEW: Products
+import ProductsPage from "./pages/ProductsPage";
+
 // NEW: Debug health page
 import Health from "./pages/debug/Health";
 
@@ -50,6 +53,7 @@ function usePageTitle() {
   if (pathname.startsWith("/deals")) return "Opportunities";
   if (pathname.startsWith("/business-cases")) return "Business Cases";
   if (pathname.startsWith("/scenarios")) return "Scenario";
+  if (pathname.startsWith("/products")) return "Products"; // ← eklendi
   if (pathname.startsWith("/users")) return "Users";
   if (pathname.startsWith("/roles")) return "Roles";
   if (pathname.startsWith("/login")) return "Login";
@@ -183,6 +187,19 @@ export default function App() {
           >
             Opportunities
           </NavLink>
+
+          {/* NEW: Products */}
+          <NavLink
+            to="/products"
+            className={({ isActive }) =>
+              `block px-3 py-2 rounded-lg hover:bg-indigo-50 ${
+                isActive ? "bg-indigo-100 text-indigo-700" : ""
+              }`
+            }
+          >
+            Products
+          </NavLink>
+
           {/* Business Case / Scenario menüden değil, detaydan gidiliyor */}
           {isAdmin && (
             <>
@@ -317,6 +334,16 @@ export default function App() {
               element={
                 <RequireAuth>
                   <ScenarioPage />
+                </RequireAuth>
+              }
+            />
+
+            {/* NEW: Products rotası */}
+            <Route
+              path="/products"
+              element={
+                <RequireAuth>
+                  <ProductsPage />
                 </RequireAuth>
               }
             />
