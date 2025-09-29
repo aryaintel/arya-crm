@@ -8,7 +8,6 @@ import sqlite3
 
 from fastapi import APIRouter, HTTPException, Query
 
-
 # ---------------------------------------------------------------------
 # DB location
 # ---------------------------------------------------------------------
@@ -71,7 +70,8 @@ def _table_exists(con: sqlite3.Connection, name: str) -> bool:
 def list_products(
     q: Optional[str] = Query(None, description="FTS or LIKE search on code/name/description"),
     active: Optional[bool] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
+    # FE modal limit=1000 gönderiyor; burada üst sınırı genişlettik.
+    limit: int = Query(50, ge=1, le=10000),
     offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
     with cx() as con:
