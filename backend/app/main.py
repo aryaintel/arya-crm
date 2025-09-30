@@ -37,6 +37,9 @@ from .api import (
 # NEW: Products & Price Books
 from .api.products_api import router as products_router
 
+# NEW: Rebates (Scenario-level)
+from .api.rebates_api import router as rebates_router
+
 
 app = FastAPI(title="Arya CRM API")
 
@@ -123,6 +126,7 @@ app.include_router(scenario_services.router)   # SERVICES (OPEX)
 app.include_router(scenario_overheads.router)  # Overheads
 app.include_router(scenario_fx.router)         # FX
 app.include_router(scenario_tax.router)        # TAX
+app.include_router(rebates_router)             # REBATES (NEW)
 
 # Workflow & pricing/escalation
 app.include_router(workflow.router)

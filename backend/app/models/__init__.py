@@ -103,7 +103,9 @@ class Product(Base):
     barcode_gtin = Column(String, nullable=True)
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
 
-    meta_json = Column(Text, nullable=True)  # <-- güvenli isim
+    # DB'de kolon adı 'metadata' — ORM'de güvenli isim ile map'liyoruz
+    meta_json = Column("metadata", Text, nullable=True)
+
     created_at = Column(DateTime, nullable=False, server_default=func.now())
     updated_at = Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     deleted_at = Column(DateTime, nullable=True)
@@ -152,6 +154,7 @@ class PriceBook(Base):
     __tablename__ = "price_books"
 
     id = Column(Integer, primary_key=True, index=True)
+    code = Column(String, nullable=False, unique=True)  # seed & unique kullanım
     name = Column(String, nullable=False)
     currency = Column(String(3), nullable=False, default="USD")
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")
@@ -467,7 +470,8 @@ class Pipeline(Base):
 class Stage(Base):
     __tablename__ = "stages"
     id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
+    # FIX: tenant_id artık tenants.id'ye referans verir
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False)
     pipeline_id = Column(Integer, ForeignKey("pipelines.id", ondelete="CASCADE"), nullable=False)
 
     name = Column(String, nullable=False)
@@ -541,6 +545,9 @@ class Scenario(Base):
     twc        = relationship("ScenarioTWC", uselist=False, back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
     taxes      = relationship("ScenarioTaxRule", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
     escalation_policies = relationship("ScenarioEscalationPolicy", cascade="all, delete-orphan", lazy="selectin", backref="scenario")
+
+    # NEW: Rebates relationship
+    rebates    = relationship("ScenarioRebate", back_populates="scenario", cascade="all, delete-orphan", lazy="selectin")
 
     __table_args__ = (Index("ix_scenarios_bc", "business_case_id"),)
 
@@ -791,6 +798,103 @@ class ScenarioTaxRule(Base):
         CheckConstraint("(end_month IS NULL) OR (end_month >= 1 AND end_month <= 12)", name="ck_tax_end_month"),
         Index("ix_tax_scenario", "scenario_id"),
         Index("ix_tax_active", "is_active"),
+    )
+
+
+# =========================
+# Scenario Rebates (NEW)
+# =========================
+class ScenarioRebate(Base):
+    __tablename__ = "scenario_rebates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scenario_id = Column(Integer, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False)
+
+    name = Column(String(255), nullable=False)
+    scope = Column(String(20), nullable=False, default="all")          # all|boq|services|product
+    kind = Column(String(20), nullable=False, default="percent")       # percent|tier_percent|lump_sum
+    basis = Column(String(20), nullable=False, default="revenue")      # revenue|volume
+
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True)
+
+    valid_from_year  = Column(Integer, nullable=True)
+    valid_from_month = Column(Integer, nullable=True)
+    valid_to_year    = Column(Integer, nullable=True)
+    valid_to_month   = Column(Integer, nullable=True)
+
+    accrual_method = Column(String(20), nullable=False, default="monthly")  # monthly|quarterly|annual|on_invoice
+    pay_month_lag  = Column(Integer, nullable=True, default=0)
+
+    is_active = Column(Boolean, nullable=False, default=True, server_default="1")
+    notes     = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    scenario = relationship("Scenario", back_populates="rebates", lazy="selectin")
+    tiers    = relationship("ScenarioRebateTier", back_populates="rebate", cascade="all, delete-orphan", lazy="selectin")
+    lumps    = relationship("ScenarioRebateLump", back_populates="rebate", cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (
+        CheckConstraint("scope IN ('all','boq','services','product')", name="ck_rebate_scope"),
+        CheckConstraint("kind IN ('percent','tier_percent','lump_sum')", name="ck_rebate_kind"),
+        CheckConstraint("basis IN ('revenue','volume')", name="ck_rebate_basis"),
+        CheckConstraint("(valid_from_month IS NULL) OR (valid_from_month BETWEEN 1 AND 12)", name="ck_rebate_from_month"),
+        CheckConstraint("(valid_to_month   IS NULL) OR (valid_to_month   BETWEEN 1 AND 12)", name="ck_rebate_to_month"),
+        CheckConstraint("accrual_method IN ('monthly','quarterly','annual','on_invoice')", name="ck_rebate_accrual"),
+        Index("ix_rebates_scenario", "scenario_id"),
+        Index("ix_rebates_active", "is_active"),
+    )
+
+
+class ScenarioRebateTier(Base):
+    __tablename__ = "scenario_rebate_tiers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    rebate_id = Column(Integer, ForeignKey("scenario_rebates.id", ondelete="CASCADE"), nullable=False)
+
+    min_value = Column(Numeric(18, 6), nullable=False, default=0)
+    max_value = Column(Numeric(18, 6), nullable=True)
+
+    percent   = Column(Numeric(9, 4), nullable=True)
+    amount    = Column(Numeric(18, 6), nullable=True)
+
+    description = Column(Text, nullable=True)
+    sort_order  = Column(Integer, nullable=False, default=0)
+
+    created_at  = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at  = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    rebate = relationship("ScenarioRebate", back_populates="tiers", lazy="selectin")
+
+    __table_args__ = (
+        CheckConstraint("(percent IS NOT NULL) OR (amount IS NOT NULL)", name="ck_rebate_tier_value"),
+        Index("ix_tiers_rebate", "rebate_id", "sort_order"),
+        Index("ix_tiers_range", "min_value", "max_value"),
+    )
+
+
+class ScenarioRebateLump(Base):
+    __tablename__ = "scenario_rebate_lumps"
+
+    id = Column(Integer, primary_key=True, index=True)
+    rebate_id = Column(Integer, ForeignKey("scenario_rebates.id", ondelete="CASCADE"), nullable=False)
+
+    year     = Column(Integer, nullable=False)
+    month    = Column(Integer, nullable=False)  # 1..12
+    amount   = Column(Numeric(18, 6), nullable=False)
+    currency = Column(String(3), nullable=False, default="USD")
+
+    note       = Column(Text, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    rebate = relationship("ScenarioRebate", back_populates="lumps", lazy="selectin")
+
+    __table_args__ = (
+        CheckConstraint("month >= 1 AND month <= 12", name="ck_rebate_lump_month"),
+        Index("ix_lumps_rebate", "rebate_id"),
+        Index("ix_lumps_period", "year", "month"),
     )
 
 
