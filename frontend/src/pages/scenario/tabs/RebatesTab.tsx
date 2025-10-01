@@ -1,3 +1,4 @@
+// [BEGIN FILE] frontend/src/pages/scenario/tabs/RebatesTab.tsx
 import React, { useEffect, useMemo, useState } from "react";
 
 /**
@@ -27,78 +28,69 @@ type RebateRow = {
   valid_to_year?: number | null;
   valid_to_month?: number | null;
   accrual_method: "monthly" | "quarterly" | "annual" | "on_invoice";
-  pay_month_lag?: number | null;
+  pay_month_lag: number;
   is_active: boolean;
   notes?: string | null;
-  percent?: number | null; // bazı backendler düz percent döndürebilir
-  tiers?: TierRow[];
-  lumps?: LumpRow[];
-};
-
-type TierRow = {
-  id: number;
-  rebate_id: number;
-  min_value: number;
-  max_value?: number | null;
-  percent?: number | null;
-  amount?: number | null;
-  description?: string | null;
-  sort_order: number;
-};
-
-type LumpRow = {
-  id: number;
-  rebate_id: number;
-  year: number;
-  month: number;
-  amount: number;
-  description?: string | null;
-};
-
-type RebateIn = {
-  name: string;
-  scope: RebateScope;
-  kind: RebateKind;
-  basis: RebateBasis;
-  product_id?: number | null;
-
-  valid_from_year?: number | null;
-  valid_from_month?: number | null;
-  valid_to_year?: number | null;
-  valid_to_month?: number | null;
-
-  accrual_method: "monthly" | "quarterly" | "annual" | "on_invoice";
-  pay_month_lag?: number | null;
-
-  is_active: boolean;
-  notes?: string | null;
-
-  // UI-only — body'ye gönderilmez; 'percent' olarak normalize edilir
-  percent_value?: number | null;
-
+  // kind-specific
+  percent?: number | null; // percent
   tiers?: Array<{
+    id: number;
+    rebate_id: number;
     min_value: number;
     max_value?: number | null;
-    percent?: number | null;
-    amount?: number | null;
-    description?: string | null;
-    sort_order?: number;
-  }>;
+    percent: number;
+    sort_order: number;
+  }> | null;
   lumps?: Array<{
+    id: number;
+    rebate_id: number;
     year: number;
     month: number;
     amount: number;
     description?: string | null;
+  }> | null;
+};
+
+type Draft = {
+  name: string;
+  scope: RebateScope;
+  kind: RebateKind;
+  basis: RebateBasis;
+  product_id?: string;
+  valid_from_year?: string;
+  valid_from_month?: string;
+  valid_to_year?: string;
+  valid_to_month?: string;
+  accrual_method: "monthly" | "quarterly" | "annual" | "on_invoice";
+  pay_month_lag?: string;
+  is_active: boolean;
+  notes?: string;
+
+  // percent
+  percent_value?: string;
+
+  // tiered
+  tiers?: Array<{
+    min_value?: string;
+    max_value?: string;
+    percent?: string;
+  }>;
+
+  // lumps
+  lumps?: Array<{
+    year?: string;
+    month?: string;
+    amount?: string;
+    description?: string;
   }>;
 };
 
-type RebateSubmit =
-  | (Omit<RebateIn, "percent_value" | "tiers" | "lumps"> & { percent: number })
-  | (Omit<RebateIn, "percent_value" | "lumps"> & { tiers: NonNullable<RebateIn["tiers"]> })
-  | (Omit<RebateIn, "percent_value" | "tiers"> & { lumps: NonNullable<RebateIn["lumps"]> });
+type EditState =
+  | { mode: "none" }
+  | { mode: "create"; draft: Draft }
+  | { mode: "edit"; id: number; draft: Draft };
 
-// -------------------------- Utils --------------------------
-function parseScenarioIdFromLocation(): number | undefined {
+function useScenarioIdFromUrl(): number | undefined {
   try {
     const m = window.location.pathname.match(/\/scenarios\/(\d+)/i);
     if (m && m[1]) return Number(m[1]);
@@ -125,13 +117,13 @@ function resolveApiBase(): string {
     if (meta?.content) return meta.content.replace(/\/+$/, "");
   }
 
-  // 4) Heuristic for local dev: FE 5173/3000/5174/8080 → BE 8000
-  if (typeof window !== "undefined") {
+  // 4) Same-origin heuristic: :5173 → :8000
+  try {
     const { protocol, hostname, port } = window.location;
     const p = Number(port || (protocol === "https:" ? 443 : 80));
     const backendPort = [5173, 3000, 5174, 8080].includes(p) ? 8000 : p;
     return `${protocol}//${hostname}:${backendPort}`;
-  }
+  } catch {}
 
   // 5) Fallback
   return "";
@@ -150,8 +142,12 @@ function getApiPrefix(): string {
     // @ts-ignore
     return String((window as any).__API_PREFIX__);
   }
-  const meta = document.querySelector('meta[name="api-prefix"]') as HTMLMetaElement | null;
-  if (meta?.content) return meta.content;
+  // meta
+  try {
+    const meta = document.querySelector('meta[name="api-prefix"]') as HTMLMetaElement | null;
+    if (meta?.content) return meta.content;
+  } catch {}
+  // varsayılan
   return "/api";
 }
 const API_PREFIX = getApiPrefix();
@@ -204,13 +200,13 @@ function getBearerToken(): string | undefined {
     // 1) Global köprüler
     // @ts-ignore
     const w: any = window;
-    if (w?.__AUTH_TOKEN__) {
-      const t = String(w.__AUTH_TOKEN__);
+    if (w?.__AUTH__?.token) {
+      const t = String(w.__AUTH__.token);
       if (t.startsWith("Bearer ")) return t;
       if (looksLikeJwt(t)) return `Bearer ${t}`;
     }
-    if (w?.__AUTH__?.token) {
-      const t = String(w.__AUTH__.token);
+    if (w?.__AUTH_TOKEN__) {
+      const t = String(w.__AUTH_TOKEN__);
       if (t.startsWith("Bearer ")) return t;
       if (looksLikeJwt(t)) return `Bearer ${t}`;
     }
@@ -224,14 +220,11 @@ function getBearerToken(): string | undefined {
       "jwt",
       "bearer",
       "id_token",
-      "AUTH_TOKEN",
-      "aryaintel.auth",
-      "aryaintel_token",
-      "auth",
+      // not: app’te kullanılan "aryaintel_token" deep scan’de yakalanıyor (aşağıda)
     ];
     for (const st of stores) {
       for (const key of fastKeys) {
-        const raw = st.getItem(key);
+        const raw = st.getItem(key) || "";
         if (!raw) continue;
         if (raw.startsWith("Bearer ") && looksLikeJwt(raw.slice(7))) return raw;
         if (looksLikeJwt(raw)) return `Bearer ${raw}`;
@@ -280,132 +273,14 @@ function getBearerToken(): string | undefined {
 const MONTHS = Array.from({ length: 12 }, (_, i) => i + 1);
 
 const cellClass = "px-2 py-1 border-b border-gray-200 text-sm";
-const thClass =
-  "px-2 py-2 border-b-2 border-gray-300 text-left text-xs font-semibold uppercase tracking-wide";
-const badge = (txt: string) =>
-  ({
-    percent: "bg-blue-100 text-blue-800",
-    tier_percent: "bg-purple-100 text-purple-800",
-    lump_sum: "bg-amber-100 text-amber-800",
-    all: "bg-gray-100 text-gray-800",
-    boq: "bg-emerald-100 text-emerald-800",
-    services: "bg-cyan-100 text-cyan-800",
-    product: "bg-pink-100 text-pink-800",
-    active: "bg-green-100 text-green-800",
-    inactive: "bg-red-100 text-red-800",
-  } as Record<string, string>)[txt] || "bg-gray-100 text-gray-800";
 
-/** backend düz 'percent' döndürüyorsa onu; yoksa tiers[0].percent'i oku */
-function flatPercentFromRow(r: RebateRow): number | undefined {
-  const p = r.percent;
-  if (p !== undefined && p !== null) return Number(p);
-  const pt = r.tiers?.[0]?.percent;
-  return pt !== undefined && pt !== null ? Number(pt) : undefined;
-}
+// -------------------------- API HELPERS ---------------------
 
-/** RebateRow → RebateIn (UI draft) dönüşümü tek noktadan */
-function rowToDraft(row: RebateRow): RebateIn {
-  return {
-    name: row.name,
-    scope: row.scope,
-    kind: row.kind,
-    basis: row.basis,
-    product_id: row.product_id ?? null,
-    valid_from_year: row.valid_from_year ?? null,
-    valid_from_month: row.valid_from_month ?? null,
-    valid_to_year: row.valid_to_year ?? null,
-    valid_to_month: row.valid_to_month ?? null,
-    accrual_method: row.accrual_method,
-    pay_month_lag: row.pay_month_lag ?? 0,
-    is_active: row.is_active,
-    notes: row.notes ?? "",
-    percent_value: row.kind === "percent" ? flatPercentFromRow(row) ?? 0 : undefined,
-    tiers:
-      row.kind === "tier_percent"
-        ? (row.tiers ?? []).map((t, i) => ({
-            min_value: Number(t.min_value ?? 0),
-            max_value: t.max_value == null ? null : Number(t.max_value),
-            percent: t.percent == null ? null : Number(t.percent),
-            amount: t.amount == null ? null : Number(t.amount),
-            description: t.description ?? "",
-            sort_order: t.sort_order ?? i,
-          }))
-        : undefined,
-    lumps:
-      row.kind === "lump_sum"
-        ? (row.lumps ?? []).map((l) => ({
-            year: Number(l.year),
-            month: Number(l.month),
-            amount: Number(l.amount),
-            description: l.description ?? "",
-          }))
-        : undefined,
-  };
-}
+type RequestInitEx = RequestInit & { query?: Record<string, any> };
 
-/** UI draft → API body (percent_value alanını düşürür ve normalize eder) */
-function buildSubmitBody(d: RebateIn): RebateSubmit {
-  const base = {
-    name: d.name.trim(),
-    scope: d.scope,
-    kind: d.kind,
-    basis: d.basis,
-    product_id: toIntOrNull(d.product_id) ?? null,
-    valid_from_year: toIntOrNull(d.valid_from_year) ?? null,
-    valid_from_month: toIntOrNull(d.valid_from_month) ?? null,
-    valid_to_year: toIntOrNull(d.valid_to_year) ?? null,
-    valid_to_month: toIntOrNull(d.valid_to_month) ?? null,
-    accrual_method: d.accrual_method,
-    pay_month_lag: toIntOrNull(d.pay_month_lag) ?? 0,
-    is_active: !!d.is_active,
-    notes: d.notes || "",
-  };
-
-  if (d.kind === "percent") {
-    const percent = toNumOrNull(d.percent_value) ?? 0;
-    return { ...base, percent };
-  }
-
-  if (d.kind === "tier_percent") {
-    const tiers = (d.tiers || []).map((t, idx) => ({
-      min_value: Number(t.min_value ?? 0),
-      max_value: t.max_value == null ? null : Number(t.max_value),
-      percent: t.percent == null ? null : Number(t.percent),
-      amount: t.amount == null ? null : Number(t.amount),
-      description: t.description || "",
-      sort_order: (t as any).sort_order !== undefined ? Number((t as any).sort_order) : idx,
-    }));
-    return { ...base, tiers };
-  }
-
-  // lump_sum
-  const lumps = (d.lumps || []).map((l) => ({
-    year: Number(l.year),
-    month: Number(l.month),
-    amount: Number(l.amount),
-    description: l.description || "",
-  }));
-  return { ...base, lumps };
-}
-
-function toIntOrNull(v: any): number | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-function toNumOrNull(v: any): number | null | undefined {
-  if (v === undefined) return undefined;
-  if (v === null || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
-
-/** fetch helper (API_PREFIX + path) — Authorization header’ı otomatik ekler */
 async function api<T>(
   path: string,
-  init?: RequestInit & { query?: Record<string, any> }
+  init?: RequestInitEx
 ): Promise<T> {
   const base = API_BASE || window.location.origin;
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
@@ -434,34 +309,137 @@ async function api<T>(
     if (bearer) headers["Authorization"] = bearer;
   }
 
+  // *** FIX: headers son söz olacak şekilde sırayı değiştir ***
   const res = await fetch(url.toString(), {
+    ...init,                          // (Önce init)
     credentials: "include",
-    headers,
-    ...init,
+    headers,                          // (Sonra birleşik headers → Authorization korunur)
   });
 
   if (!res.ok) {
     let detail = "";
     try {
-      const raw = await res.text();
-      if (raw) {
-        try {
-          const j = JSON.parse(raw);
-          detail = (j as any)?.detail || (j as any)?.message || raw;
-        } catch {
-          detail = raw;
-        }
+      const raw = await res.clone().json();
+      if (raw?.detail) {
+        if (typeof raw.detail === "string") detail = raw.detail;
+        else if (Array.isArray(raw.detail) && raw.detail[0]?.msg) detail = raw.detail[0].msg;
+      } else if (raw?.message) {
+        detail = raw.message;
       }
     } catch {}
-    throw new Error(`${res.status} ${res.statusText}: ${detail}`.trim());
+    const msg = `${res.status} ${res.statusText}${detail ? `: ${detail}` : ""}`;
+    throw new Error(msg);
   }
 
-  const ct = res.headers.get("content-type") || "";
-  if (ct.includes("application/json")) {
+  if (res.status === 204) return undefined as T;
+
+  // Try JSON
+  try {
     return (await res.json()) as T;
+  } catch {
+    // Plain text fallback
+    const txt = await res.text();
+    return txt as unknown as T;
   }
-  // @ts-ignore
-  return undefined as T;
+}
+
+function toIntOrNull(x?: string): number | null {
+  if (x == null || x === "") return null;
+  const n = Number(x);
+  return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+function toNumOrNull(x?: string): number | null {
+  if (x == null || x === "") return null;
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+}
+
+function emptyDraft(): Draft {
+  return {
+    name: "",
+    scope: "all",
+    kind: "percent",
+    basis: "revenue",
+    accrual_method: "monthly",
+    pay_month_lag: "0",
+    is_active: true,
+    notes: "",
+    percent_value: "",
+    tiers: [],
+    lumps: [],
+  };
+}
+
+function rowToDraft(r: RebateRow): Draft {
+  return {
+    name: r.name,
+    scope: r.scope,
+    kind: r.kind,
+    basis: r.basis,
+    product_id: r.product_id != null ? String(r.product_id) : "",
+    valid_from_year: r.valid_from_year != null ? String(r.valid_from_year) : "",
+    valid_from_month: r.valid_from_month != null ? String(r.valid_from_month) : "",
+    valid_to_year: r.valid_to_year != null ? String(r.valid_to_year) : "",
+    valid_to_month: r.valid_to_month != null ? String(r.valid_to_month) : "",
+    accrual_method: r.accrual_method,
+    pay_month_lag: String(r.pay_month_lag ?? 0),
+    is_active: !!r.is_active,
+    notes: r.notes ?? "",
+    percent_value: r.percent != null ? String(r.percent) : "",
+    tiers: (r.tiers || [])?.map((t) => ({
+      min_value: String(t.min_value ?? 0),
+      max_value: t.max_value == null ? "" : String(t.max_value),
+      percent: String(t.percent ?? 0),
+    })),
+    lumps: (r.lumps || [])?.map((l) => ({
+      year: String(l.year ?? ""),
+      month: String(l.month ?? ""),
+      amount: String(l.amount ?? 0),
+      description: l.description ?? "",
+    })),
+  };
+}
+
+function buildSubmitBody(d: Draft) {
+  const base = {
+    name: d.name.trim(),
+    scope: d.scope,
+    kind: d.kind,
+    basis: d.basis,
+    product_id: toIntOrNull(d.product_id),
+    valid_from_year: toIntOrNull(d.valid_from_year),
+    valid_from_month: toIntOrNull(d.valid_from_month),
+    valid_to_year: toIntOrNull(d.valid_to_year),
+    valid_to_month: toIntOrNull(d.valid_to_month),
+    accrual_method: d.accrual_method,
+    pay_month_lag: toIntOrNull(d.pay_month_lag) ?? 0,
+    is_active: !!d.is_active,
+    notes: d.notes || "",
+  };
+
+  if (d.kind === "percent") {
+    const percent = toNumOrNull(d.percent_value) ?? 0;
+    return { ...base, percent };
+  }
+
+  if (d.kind === "tier_percent") {
+    const tiers = (d.tiers || []).map((t, idx) => ({
+      min_value: Number(t.min_value ?? 0),
+      max_value: t.max_value == null ? null : Number(t.max_value),
+      percent: t.percent == null ? 0 : Number(t.percent),
+      sort_order: idx,
+    }));
+    return { ...base, tiers };
+  }
+
+  // lump_sum
+  const lumps = (d.lumps || []).map((l) => ({
+    year: Number(l.year ?? 0),
+    month: Number(l.month ?? 0),
+    amount: Number(l.amount ?? 0),
+    description: l.description || "",
+  }));
+  return { ...base, lumps };
 }
 
 function formatValidity(
@@ -475,95 +453,18 @@ function formatValidity(
   return `${p1} → ${p2}`;
 }
 
-// -------------------------- UI --------------------------
-const L = {
-  Label: (p: { children: React.ReactNode; htmlFor?: string }) => (
-    <label
-      htmlFor={p.htmlFor}
-      className="block text-xs font-semibold text-gray-600 mb-1"
-    >
-      {p.children}
-    </label>
-  ),
-  Input: (
-    p: React.InputHTMLAttributes<HTMLInputElement> & { widthClass?: string }
-  ) => (
-    <input
-      {...p}
-      className={
-        "border border-gray-300 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-400 " +
-        (p.className || "") +
-        " " +
-        (p.widthClass || "")
-      }
-    />
-  ),
-  Select: (
-    p: React.SelectHTMLAttributes<HTMLSelectElement> & { widthClass?: string }
-  ) => (
-    <select
-      {...p}
-      className={
-        "border border-gray-300 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-400 " +
-        (p.className || "") +
-        " " +
-        (p.widthClass || "")
-      }
-    />
-  ),
-  TextArea: (
-    p: React.TextareaHTMLAttributes<HTMLTextAreaElement> & {
-      widthClass?: string;
-    }
-  ) => (
-    <textarea
-      {...p}
-      className={
-        "border border-gray-300 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-2 focus:ring-indigo-400 " +
-        (p.className || "") +
-        " " +
-        (p.widthClass || "")
-      }
-      rows={p.rows ?? 3}
-    />
-  ),
-  Button: (
-    p: React.ButtonHTMLAttributes<HTMLButtonElement> & {
-      variant?: "primary" | "secondary" | "danger" | "ghost";
-      small?: boolean;
-    }
-  ) => {
-    const base =
-      "inline-flex items-center justify-center rounded transition-colors";
-    const size = p.small ? " px-2 py-1 text-xs" : " px-3 py-1.5 text-sm";
-    const palette =
-      p.variant === "danger"
-        ? " bg-red-600 text-white hover:bg-red-700"
-        : p.variant === "secondary"
-        ? " bg-gray-200 text-gray-800 hover:bg-gray-300"
-        : p.variant === "ghost"
-        ? " bg-transparent text-gray-700 hover:bg-gray-100"
-        : " bg-indigo-600 text-white hover:bg-indigo-700";
-    return (
-      <button {...p} className={`${base}${size}${palette} ${p.className || ""}`}>
-        {p.children}
-      </button>
-    );
-  },
-};
+// -------------------------- UI ---------------------
 
-// -------------------------- Component --------------------------
 export default function RebatesTab(props: { scenarioId?: number }) {
-  const scenarioId =
-    props.scenarioId ?? parseScenarioIdFromLocation() ?? undefined;
+  const urlScenarioId = useScenarioIdFromUrl();
+  const scenarioId = props.scenarioId ?? urlScenarioId;
 
   const [items, setItems] = useState<RebateRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState>({ mode: "none" });
-
   const [refreshTick, setRefreshTick] = useState(0);
-  const doRefresh = () => setRefreshTick((x) => x + 1);
+  const doRefresh = () => setRefreshTick((t) => t + 1);
 
   useEffect(() => {
     if (!scenarioId) return;
@@ -601,7 +502,7 @@ export default function RebatesTab(props: { scenarioId?: number }) {
       });
       doRefresh();
     } catch (e: any) {
-      alert(e.message || String(e));
+      alert(e?.message || String(e));
     }
   };
 
@@ -618,23 +519,17 @@ export default function RebatesTab(props: { scenarioId?: number }) {
       });
       doRefresh();
     } catch (e: any) {
-      alert(e.message || String(e));
+      alert(e?.message || String(e));
     }
   };
 
-  const save = async () => {
+  const onSave = async () => {
     if (!scenarioId) return;
     if (edit.mode === "none") return;
 
-    const d = edit.draft;
-
-    // validations
-    if (!d.name || d.name.trim().length === 0) {
-      alert("Name is required.");
-      return;
-    }
-    if (d.scope === "product" && !toIntOrNull(d.product_id)) {
-      alert("When scope='product', product_id is required.");
+    const d = edit.mode === "create" ? edit.draft : edit.draft;
+    if (!d.name || !d.kind || !d.scope || !d.basis) {
+      alert("name, kind, scope and basis are required.");
       return;
     }
     if (d.kind === "percent" && (d.percent_value === undefined || d.percent_value === null)) {
@@ -661,669 +556,211 @@ export default function RebatesTab(props: { scenarioId?: number }) {
       setEdit({ mode: "none" });
       doRefresh();
     } catch (e: any) {
-      alert(e.message || String(e));
+      alert(e?.message || String(e));
     }
   };
 
-  const editingTitle =
-    edit.mode === "create"
-      ? "Create Rebate"
-      : edit.mode === "edit"
-      ? `Edit Rebate #${edit.id}`
-      : "";
-
-  const ListTable = useMemo(
-    () => (
-      <div className="overflow-auto border rounded-md">
-        <table className="min-w-[960px] w-full">
-          <thead>
-            <tr className="bg-gray-50">
-              <th className={thClass}>Name</th>
-              <th className={thClass}>Kind</th>
-              <th className={thClass}>Scope</th>
-              <th className={thClass}>Basis</th>
-              <th className={thClass}>Validity</th>
-              <th className={thClass}>Accrual</th>
-              <th className={thClass}>Lag</th>
-              <th className={thClass}>Status</th>
-              <th className={thClass}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((r) => (
-              <tr key={r.id} className="hover:bg-gray-50">
-                <td className={cellClass}>
-                  <div className="font-medium text-gray-900">{r.name}</div>
-                  {r.notes ? (
-                    <div className="text-gray-500 text-xs">{r.notes}</div>
-                  ) : null}
-                </td>
-                <td className={cellClass}>
-                  <span className={`px-2 py-0.5 rounded text-xs ${badge(r.kind)}`}>
-                    {r.kind}
-                  </span>
-                </td>
-                <td className={cellClass}>
-                  <span className={`px-2 py-0.5 rounded text-xs ${badge(r.scope)}`}>
-                    {r.scope}
-                  </span>
-                  {r.scope === "product" && r.product_id ? (
-                    <span className="ml-2 text-xs text-gray-500">
-                      product_id: {r.product_id}
-                    </span>
-                  ) : null}
-                </td>
-                <td className={cellClass}>{r.basis}</td>
-                <td className={cellClass}>
-                  <span className="text-xs text-gray-700">
-                    {formatValidity(
-                      r.valid_from_year,
-                      r.valid_from_month,
-                      r.valid_to_year,
-                      r.valid_to_month
-                    )}
-                  </span>
-                </td>
-                <td className={cellClass}>{r.accrual_method}</td>
-                <td className={cellClass}>{r.pay_month_lag ?? 0}</td>
-                <td className={cellClass}>
-                  <span
-                    className={`px-2 py-0.5 rounded text-xs ${
-                      r.is_active ? badge("active") : badge("inactive")
-                    }`}
-                  >
-                    {r.is_active ? "active" : "inactive"}
-                  </span>
-                </td>
-                <td className={cellClass}>
-                  <div className="flex gap-2">
-                    <L.Button small variant="secondary" onClick={() => startEdit(r)}>
-                      Edit
-                    </L.Button>
-                    <L.Button small variant="ghost" onClick={() => toggleActive(r)}>
-                      {r.is_active ? "Deactivate" : "Activate"}
-                    </L.Button>
-                    <L.Button small variant="danger" onClick={() => remove(r)}>
-                      Delete
-                    </L.Button>
-                  </div>
-                  {r.kind === "percent" && flatPercentFromRow(r) != null ? (
-                    <div className="mt-1 text-xs text-gray-500">
-                      %: {Number(flatPercentFromRow(r)).toFixed(4)}
-                    </div>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-            {items.length === 0 && !loading ? (
-              <tr>
-                <td className={cellClass} colSpan={9}>
-                  <div className="text-center text-gray-500 text-sm py-6">
-                    No rebates yet. Click “New Rebate”.
-                  </div>
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    ),
-    [items, loading]
-  );
-
   return (
-    <div className="p-4">
-      <div className="mb-3 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">Scenario Rebates</h2>
-        <div className="flex items-center gap-2">
-          <L.Button variant="secondary" onClick={doRefresh}>
-            Refresh
-          </L.Button>
-          <L.Button onClick={startCreate}>New Rebate</L.Button>
+    <div className="space-y-4">
+      {/* Liste */}
+      <div className="rounded border p-4 bg-white">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold">Scenario Rebates</h3>
+          <div className="flex gap-2">
+            <button className="btn btn-secondary" onClick={doRefresh}>Refresh</button>
+            <button className="btn btn-primary" onClick={startCreate}>New Rebate</button>
+          </div>
         </div>
+        {loading && <div className="text-sm text-gray-500">Loading...</div>}
+        {err && <div className="text-sm text-red-600">{err}</div>}
+        {!loading && !err && items.length === 0 && (
+          <div className="text-sm text-gray-500">No rebates yet. Click “New Rebate”.</div>
+        )}
+        {items.length > 0 && (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-500">
+                <th className={cellClass}>Name</th>
+                <th className={cellClass}>Kind</th>
+                <th className={cellClass}>Scope</th>
+                <th className={cellClass}>Basis</th>
+                <th className={cellClass}>Validity</th>
+                <th className={cellClass}>Accrual</th>
+                <th className={cellClass}>Lag</th>
+                <th className={cellClass}>Status</th>
+                <th className={cellClass}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((r) => (
+                <tr key={r.id}>
+                  <td className={cellClass}>{r.name}</td>
+                  <td className={cellClass}>{r.kind}</td>
+                  <td className={cellClass}>{r.scope}</td>
+                  <td className={cellClass}>{r.basis}</td>
+                  <td className={cellClass}>{formatValidity(r.valid_from_year, r.valid_from_month, r.valid_to_year, r.valid_to_month)}</td>
+                  <td className={cellClass}>{r.accrual_method}</td>
+                  <td className={cellClass}>{r.pay_month_lag ?? 0}</td>
+                  <td className={cellClass}>
+                    <span className={r.is_active ? "text-green-600" : "text-gray-500"}>
+                      {r.is_active ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td className={cellClass}>
+                    <div className="flex gap-2">
+                      <button className="btn btn-xs" onClick={() => startEdit(r)}>Edit</button>
+                      <button className="btn btn-xs" onClick={() => toggleActive(r)}>
+                        {r.is_active ? "Deactivate" : "Activate"}
+                      </button>
+                      <button className="btn btn-xs btn-danger" onClick={() => remove(r)}>Delete</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
-      {!scenarioId ? (
-        <div className="text-red-600 text-sm">
-          Scenario ID not found. Pass as prop or ensure route contains /scenarios/:id.
-        </div>
-      ) : null}
+      {/* Create / Edit Form */}
+      {(edit.mode === "create" || edit.mode === "edit") && (
+        <div className="rounded border p-4 bg-white">
+          <h3 className="font-semibold mb-3">{edit.mode === "create" ? "Create Rebate" : "Edit Rebate"}</h3>
 
-      {err ? (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded px-3 py-2 mb-3">
-          {err}
-        </div>
-      ) : null}
-
-      {loading ? (
-        <div className="text-sm text-gray-600 mb-3">Loading…</div>
-      ) : null}
-
-      {ListTable}
-
-      {edit.mode !== "none" ? (
-        <div className="mt-6 border rounded-md p-4 bg-white shadow-sm">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="text-base font-semibold">{editingTitle}</div>
-            <div className="flex gap-2">
-              <L.Button variant="secondary" onClick={cancelEdit}>
-                Cancel
-              </L.Button>
-              <L.Button onClick={save}>Save</L.Button>
+          {/* Basic fields */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Name</label>
+              <input className="w-full border rounded px-2 py-1" value={edit.draft.name} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, name: e.target.value } })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Scope</label>
+              <select className="w-full border rounded px-2 py-1" value={edit.draft.scope} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, scope: e.target.value as RebateScope } })}>
+                <option value="all">all</option>
+                <option value="boq">boq</option>
+                <option value="services">services</option>
+                <option value="product">product</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Kind</label>
+              <select className="w-full border rounded px-2 py-1" value={edit.draft.kind} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, kind: e.target.value as RebateKind } })}>
+                <option value="percent">percent</option>
+                <option value="tier_percent">tier_percent</option>
+                <option value="lump_sum">lump_sum</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Basis</label>
+              <select className="w-full border rounded px-2 py-1" value={edit.draft.basis} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, basis: e.target.value as RebateBasis } })}>
+                <option value="revenue">revenue</option>
+                <option value="gross_margin">gross_margin</option>
+                <option value="volume">volume</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Product ID (when scope=product)</label>
+              <input className="w-full border rounded px-2 py-1" placeholder="e.g. 101" value={edit.draft.product_id || ""} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, product_id: e.target.value } })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Accrual Method</label>
+              <select className="w-full border rounded px-2 py-1" value={edit.draft.accrual_method} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, accrual_method: e.target.value as any } })}>
+                <option value="monthly">monthly</option>
+                <option value="quarterly">quarterly</option>
+                <option value="annual">annual</option>
+                <option value="on_invoice">on_invoice</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Pay Month Lag</label>
+              <input className="w-full border rounded px-2 py-1" value={edit.draft.pay_month_lag || "0"} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, pay_month_lag: e.target.value } })} />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Notes</label>
+              <textarea className="w-full border rounded px-2 py-1" value={edit.draft.notes || ""} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, notes: e.target.value } })} />
             </div>
           </div>
 
-          <FormFields
-            draft={edit.draft}
-            setDraft={(d) =>
-              setEdit((s) => (s.mode === "none" ? s : { ...s, draft: d }))
-            }
-          />
-
-          {/* Kind-specific editors */}
-          {edit.draft.kind === "percent" ? (
-            <PercentEditor
-              draft={edit.draft}
-              setDraft={(d) =>
-                setEdit((s) => (s.mode === "none" ? s : { ...s, draft: d }))
-              }
-            />
-          ) : edit.draft.kind === "tier_percent" ? (
-            <TierEditor
-              draft={edit.draft}
-              setDraft={(d) =>
-                setEdit((s) => (s.mode === "none" ? s : { ...s, draft: d }))
-              }
-            />
-          ) : (
-            <LumpEditor
-              draft={edit.draft}
-              setDraft={(d) =>
-                setEdit((s) => (s.mode === "none" ? s : { ...s, draft: d }))
-              }
-            />
+          {/* Conditional sections */}
+          {edit.draft.kind === "percent" && (
+            <div className="mt-4">
+              <label className="block text-xs text-gray-500 mb-1">Flat percent</label>
+              <input className="w-full border rounded px-2 py-1" placeholder="Percent (%)" value={edit.draft.percent_value || ""} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, percent_value: e.target.value } })} />
+            </div>
           )}
+
+          {edit.draft.kind === "tier_percent" && (
+            <div className="mt-4">
+              <div className="text-xs text-gray-500 mb-1">Tiers</div>
+              {(edit.draft.tiers || []).map((t, i) => (
+                <div className="grid grid-cols-3 gap-2 mb-2" key={i}>
+                  <input className="border rounded px-2 py-1" placeholder="Min value" value={t.min_value || ""} onChange={(e) => {
+                    const tiers = [...(edit.draft.tiers || [])];
+                    tiers[i] = { ...tiers[i], min_value: e.target.value };
+                    setEdit({ ...edit, draft: { ...edit.draft, tiers } });
+                  }} />
+                  <input className="border rounded px-2 py-1" placeholder="Max value (optional)" value={t.max_value || ""} onChange={(e) => {
+                    const tiers = [...(edit.draft.tiers || [])];
+                    tiers[i] = { ...tiers[i], max_value: e.target.value };
+                    setEdit({ ...edit, draft: { ...edit.draft, tiers } });
+                  }} />
+                  <input className="border rounded px-2 py-1" placeholder="Percent (%)" value={t.percent || ""} onChange={(e) => {
+                    const tiers = [...(edit.draft.tiers || [])];
+                    tiers[i] = { ...tiers[i], percent: e.target.value };
+                    setEdit({ ...edit, draft: { ...edit.draft, tiers } });
+                  }} />
+                </div>
+              ))}
+              <button className="btn btn-xs" onClick={() => setEdit({ ...edit, draft: { ...edit.draft, tiers: [...(edit.draft.tiers || []), {}] } })}>
+                + Add Tier
+              </button>
+            </div>
+          )}
+
+          {edit.draft.kind === "lump_sum" && (
+            <div className="mt-4">
+              <div className="text-xs text-gray-500 mb-1">Lump sums</div>
+              {(edit.draft.lumps || []).map((l, i) => (
+                <div className="grid grid-cols-4 gap-2 mb-2" key={i}>
+                  <input className="border rounded px-2 py-1" placeholder="Year" value={l.year || ""} onChange={(e) => {
+                    const lumps = [...(edit.draft.lumps || [])];
+                    lumps[i] = { ...lumps[i], year: e.target.value };
+                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                  }} />
+                  <select className="border rounded px-2 py-1" value={l.month || ""} onChange={(e) => {
+                    const lumps = [...(edit.draft.lumps || [])];
+                    lumps[i] = { ...lumps[i], month: e.target.value };
+                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                  }}>
+                    <option value="">--</option>
+                    {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                  <input className="border rounded px-2 py-1" placeholder="Amount" value={l.amount || ""} onChange={(e) => {
+                    const lumps = [...(edit.draft.lumps || [])];
+                    lumps[i] = { ...lumps[i], amount: e.target.value };
+                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                  }} />
+                  <input className="border rounded px-2 py-1" placeholder="Description" value={l.description || ""} onChange={(e) => {
+                    const lumps = [...(edit.draft.lumps || [])];
+                    lumps[i] = { ...lumps[i], description: e.target.value };
+                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                  }} />
+                </div>
+              ))}
+              <button className="btn btn-xs" onClick={() => setEdit({ ...edit, draft: { ...edit.draft, lumps: [...(edit.draft.lumps || []), {}] } })}>
+                + Add Lump
+              </button>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="mt-4 flex gap-2">
+            <button className="btn btn-secondary" onClick={cancelEdit}>Cancel</button>
+            <button className="btn btn-primary" onClick={onSave}>Save</button>
+          </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
-
-type EditState =
-  | { mode: "none" }
-  | { mode: "create"; draft: RebateIn }
-  | { mode: "edit"; id: number; draft: RebateIn };
-
-const emptyDraft = (scenarioDefaultKind: RebateKind = "percent"): RebateIn => ({
-  name: "",
-  scope: "all",
-  kind: scenarioDefaultKind,
-  basis: "revenue",
-  product_id: null,
-  valid_from_year: null,
-  valid_from_month: null,
-  valid_to_year: null,
-  valid_to_month: null,
-  accrual_method: "monthly",
-  pay_month_lag: 0,
-  is_active: true,
-  notes: "",
-  percent_value: scenarioDefaultKind === "percent" ? 0 : undefined,
-  tiers: scenarioDefaultKind === "tier_percent" ? [] : undefined,
-  lumps: scenarioDefaultKind === "lump_sum" ? [] : undefined,
-});
-
-// -------------------------- Form Sections --------------------------
-function FormFields(props: { draft: RebateIn; setDraft: (d: RebateIn) => void }) {
-  const { draft, setDraft } = props;
-
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-      <div>
-        <L.Label>Name</L.Label>
-        <L.Input
-          value={draft.name}
-          onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-          placeholder="Year-1 rebate"
-        />
-      </div>
-
-      <div>
-        <L.Label>Scope</L.Label>
-        <L.Select
-          value={draft.scope}
-          onChange={(e) => setDraft({ ...draft, scope: e.target.value as RebateScope })}
-        >
-          <option value="all">all</option>
-          <option value="boq">boq</option>
-          <option value="services">services</option>
-          <option value="product">product</option>
-        </L.Select>
-      </div>
-
-      <div>
-        <L.Label>Kind</L.Label>
-        <L.Select
-          value={draft.kind}
-          onChange={(e) => {
-            const k = e.target.value as RebateKind;
-            if (k === "percent") {
-              setDraft({
-                ...draft,
-                kind: k,
-                percent_value: draft.percent_value ?? 0,
-                tiers: undefined,
-                lumps: undefined,
-              });
-            } else if (k === "tier_percent") {
-              setDraft({
-                ...draft,
-                kind: k,
-                tiers: draft.tiers ?? [],
-                percent_value: undefined,
-                lumps: undefined,
-              });
-            } else {
-              setDraft({
-                ...draft,
-                kind: k,
-                lumps: draft.lumps ?? [],
-                percent_value: undefined,
-                tiers: undefined,
-              });
-            }
-          }}
-        >
-          <option value="percent">percent</option>
-          <option value="tier_percent">tier_percent</option>
-          <option value="lump_sum">lump_sum</option>
-        </L.Select>
-      </div>
-
-      <div>
-        <L.Label>Basis</L.Label>
-        <L.Select
-          value={draft.basis}
-          onChange={(e) => setDraft({ ...draft, basis: e.target.value as RebateBasis })}
-        >
-          <option value="revenue">revenue</option>
-          <option value="gross_margin">gross_margin</option>
-          <option value="volume">volume</option>
-        </L.Select>
-      </div>
-
-      <div>
-        <L.Label>Product ID (when scope=product)</L.Label>
-        <L.Input
-          type="number"
-          value={draft.product_id ?? ""}
-          onChange={(e) =>
-            setDraft({ ...draft, product_id: toIntOrNull(e.target.value) ?? null })
-          }
-          placeholder="e.g. 101"
-        />
-      </div>
-
-      <div>
-        <L.Label>Accrual Method</L.Label>
-        <L.Select
-          value={draft.accrual_method}
-          onChange={(e) =>
-            setDraft({
-              ...draft,
-              accrual_method: e.target.value as RebateIn["accrual_method"],
-            })
-          }
-        >
-          <option value="monthly">monthly</option>
-          <option value="quarterly">quarterly</option>
-          <option value="annual">annual</option>
-          <option value="on_invoice">on_invoice</option>
-        </L.Select>
-      </div>
-
-      <div>
-        <L.Label>Pay Month Lag</L.Label>
-        <L.Input
-          type="number"
-          value={draft.pay_month_lag ?? 0}
-          onChange={(e) =>
-            setDraft({ ...draft, pay_month_lag: toIntOrNull(e.target.value) ?? 0 })
-          }
-        />
-      </div>
-
-      <div className="grid grid-cols-4 gap-2">
-        <div className="col-span-2">
-          <L.Label>Valid From (Year)</L.Label>
-          <L.Input
-            type="number"
-            value={draft.valid_from_year ?? ""}
-            onChange={(e) =>
-              setDraft({ ...draft, valid_from_year: toIntOrNull(e.target.value) ?? null })
-            }
-            placeholder="YYYY"
-          />
-        </div>
-        <div className="col-span-2">
-          <L.Label>Valid From (Month)</L.Label>
-          <L.Select
-            value={draft.valid_from_month ?? ""}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                valid_from_month: e.target.value ? Number(e.target.value) : null,
-              })
-            }
-          >
-            <option value="">—</option>
-            {MONTHS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </L.Select>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-4 gap-2">
-        <div className="col-span-2">
-          <L.Label>Valid To (Year)</L.Label>
-          <L.Input
-            type="number"
-            value={draft.valid_to_year ?? ""}
-            onChange={(e) =>
-              setDraft({ ...draft, valid_to_year: toIntOrNull(e.target.value) ?? null })
-            }
-            placeholder="YYYY"
-          />
-        </div>
-        <div className="col-span-2">
-          <L.Label>Valid To (Month)</L.Label>
-          <L.Select
-            value={draft.valid_to_month ?? ""}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                valid_to_month: e.target.value ? Number(e.target.value) : null,
-              })
-            }
-          >
-            <option value="">—</option>
-            {MONTHS.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </L.Select>
-        </div>
-      </div>
-
-      <div className="md:col-span-3">
-        <L.Label>Notes</L.Label>
-        <L.TextArea
-          value={draft.notes || ""}
-          onChange={(e) => setDraft({ ...draft, notes: e.target.value })}
-        />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <input
-          id="rebate_active"
-          type="checkbox"
-          checked={!!draft.is_active}
-          onChange={(e) => setDraft({ ...draft, is_active: e.target.checked })}
-        />
-        <label htmlFor="rebate_active" className="text-sm">
-          Active
-        </label>
-      </div>
-    </div>
-  );
-}
-
-/** kind='percent' — flat percent */
-function PercentEditor(props: { draft: RebateIn; setDraft: (d: RebateIn) => void }) {
-  const { draft, setDraft } = props;
-  return (
-    <div className="mt-4">
-      <div className="text-sm font-semibold mb-2">Flat percent</div>
-      <div className="max-w-xs">
-        <L.Label>Percent (%)</L.Label>
-        <L.Input
-          type="number"
-          step="0.0001"
-          value={draft.percent_value ?? 0}
-          onChange={(e) =>
-            setDraft({ ...draft, percent_value: toNumOrNull(e.target.value) ?? 0 })
-          }
-        />
-      </div>
-    </div>
-  );
-}
-
-/** kind='tier_percent' — tier grid */
-function TierEditor(props: { draft: RebateIn; setDraft: (d: RebateIn) => void }) {
-  const { draft, setDraft } = props;
-  const tiers = draft.tiers ?? [];
-
-  const addTier = () => {
-    const next = [
-      ...tiers,
-      { min_value: 0, max_value: null, percent: 0, amount: null, description: "", sort_order: tiers.length },
-    ];
-    setDraft({ ...draft, tiers: next });
-  };
-
-  const upd = (idx: number, patch: Partial<NonNullable<RebateIn["tiers"]>[number]>) => {
-    const next = tiers.map((t, i) => (i === idx ? { ...t, ...patch } : t));
-    setDraft({ ...draft, tiers: next });
-  };
-
-  const rm = (idx: number) => {
-    const next = tiers.filter((_, i) => i !== idx).map((t, i) => ({ ...t, sort_order: i }));
-    setDraft({ ...draft, tiers: next });
-  };
-
-  return (
-    <div className="mt-4">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-sm font-semibold">Tiers</div>
-        <L.Button small onClick={addTier}>Add Tier</L.Button>
-      </div>
-      <div className="overflow-auto border rounded-md">
-        <table className="min-w-[800px] w-full">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className={thClass}>#</th>
-              <th className={thClass}>Min</th>
-              <th className={thClass}>Max</th>
-              <th className={thClass}>Percent</th>
-              <th className={thClass}>Amount</th>
-              <th className={thClass}>Description</th>
-              <th className={thClass}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tiers.map((t, i) => (
-              <tr key={i} className="hover:bg-gray-50">
-                <td className={cellClass}>{i + 1}</td>
-                <td className={cellClass}>
-                  <L.Input
-                    type="number"
-                    value={t.min_value}
-                    onChange={(e) => upd(i, { min_value: Number(e.target.value) })}
-                    widthClass="w-32"
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Input
-                    type="number"
-                    value={t.max_value ?? ""}
-                    onChange={(e) =>
-                      upd(i, { max_value: e.target.value === "" ? null : Number(e.target.value) })
-                    }
-                    widthClass="w-32"
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Input
-                    type="number"
-                    step="0.0001"
-                    value={t.percent ?? ""}
-                    onChange={(e) =>
-                      upd(i, {
-                        percent: e.target.value === "" ? null : Number(e.target.value),
-                        amount: e.target.value !== "" ? null : t.amount ?? null,
-                      })
-                    }
-                    widthClass="w-28"
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Input
-                    type="number"
-                    step="0.0001"
-                    value={t.amount ?? ""}
-                    onChange={(e) =>
-                      upd(i, {
-                        amount: e.target.value === "" ? null : Number(e.target.value),
-                        percent: e.target.value !== "" ? null : t.percent ?? null,
-                      })
-                    }
-                    widthClass="w-28"
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Input
-                    value={t.description || ""}
-                    onChange={(e) => upd(i, { description: e.target.value })}
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Button small variant="danger" onClick={() => rm(i)}>
-                    Remove
-                  </L.Button>
-                </td>
-              </tr>
-            ))}
-            {tiers.length === 0 ? (
-              <tr>
-                <td className={cellClass} colSpan={7}>
-                  <div className="text-center text-gray-500 text-sm py-4">
-                    No tiers. Click “Add Tier”.
-                  </div>
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-      <div className="text-xs text-gray-500 mt-2">
-        * On each row enter <b>percent</b> or <b>amount</b> (only one).
-      </div>
-    </div>
-  );
-}
-
-/** kind='lump_sum' — multiple payments */
-function LumpEditor(props: { draft: RebateIn; setDraft: (d: RebateIn) => void }) {
-  const { draft, setDraft } = props;
-  const lumps = draft.lumps ?? [];
-
-  const addLump = () => {
-    const next = [
-      ...lumps,
-      { year: new Date().getFullYear(), month: 1, amount: 0, description: "" },
-    ];
-    setDraft({ ...draft, lumps: next });
-  };
-
-  const upd = (idx: number, patch: Partial<NonNullable<RebateIn["lumps"]>[number]>) => {
-    const next = lumps.map((l, i) => (i === idx ? { ...l, ...patch } : l));
-    setDraft({ ...draft, lumps: next });
-  };
-
-  const rm = (idx: number) => {
-    const next = lumps.filter((_, i) => i !== idx);
-    setDraft({ ...draft, lumps: next });
-  };
-
-  return (
-    <div className="mt-4">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-sm font-semibold">Lump Sum Entries</div>
-        <L.Button small onClick={addLump}>Add Entry</L.Button>
-      </div>
-      <div className="overflow-auto border rounded-md">
-        <table className="min-w-[620px] w-full">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className={thClass}>Year</th>
-              <th className={thClass}>Month</th>
-              <th className={thClass}>Amount</th>
-              <th className={thClass}>Description</th>
-              <th className={thClass}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lumps.map((l, i) => (
-              <tr key={i} className="hover:bg-gray-50">
-                <td className={cellClass}>
-                  <L.Input
-                    type="number"
-                    value={l.year}
-                    onChange={(e) => upd(i, { year: Number(e.target.value) })}
-                    widthClass="w-24"
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Select
-                    value={l.month}
-                    onChange={(e) => upd(i, { month: Number(e.target.value) })}
-                  >
-                    {MONTHS.map((m) => (
-                      <option key={m} value={m}>
-                        {m}
-                      </option>
-                    ))}
-                  </L.Select>
-                </td>
-                <td className={cellClass}>
-                  <L.Input
-                    type="number"
-                    step="0.01"
-                    value={l.amount}
-                    onChange={(e) => upd(i, { amount: Number(e.target.value) })}
-                    widthClass="w-28"
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Input
-                    value={l.description || ""}
-                    onChange={(e) => upd(i, { description: e.target.value })}
-                  />
-                </td>
-                <td className={cellClass}>
-                  <L.Button small variant="danger" onClick={() => rm(i)}>
-                    Remove
-                  </L.Button>
-                </td>
-              </tr>
-            ))}
-            {lumps.length === 0 ? (
-              <tr>
-                <td className={cellClass} colSpan={5}>
-                  <div className="text-center text-gray-500 text-sm py-4">
-                    No entries. Click “Add Entry”.
-                  </div>
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+// [END FILE]

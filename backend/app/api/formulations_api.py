@@ -7,8 +7,68 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, condecimal
 
+
+import os
+
+def _resolve_db_path() -> Path:
+    """Resolve app.db path consistently (similar to products_api)."""
+    # 1) Explicit env override
+    env = os.getenv("APP_DB_PATH")
+    if env:
+        p = Path(env)
+        if p.exists():
+            return p
+
+    # 2) Nearby common locations
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[3] / "app.db",  # repo root
+        here.parents[2] / "app.db",  # backend root
+        here.parents[1] / "app.db",  # app package dir (legacy)
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+
+    # 3) Fallback to repo root
+    return candidates[0]
+
+def _ensure_schema(cx) -> None:
+    """Create product_formulations + formulation_components tables if missing."""
+    # product_formulations
+    cx.executescript("""
+    CREATE TABLE IF NOT EXISTS product_formulations (
+      id INTEGER PRIMARY KEY,
+      product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      code TEXT NOT NULL,
+      name TEXT NULL,
+      description TEXT NULL,
+      base_price NUMERIC(18,6) NULL,
+      base_currency TEXT NULL,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      version_no INTEGER NOT NULL DEFAULT 1,
+      is_archived INTEGER NOT NULL DEFAULT 0,
+      archived_at TEXT NULL,
+      parent_formulation_id INTEGER NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_product_formulations_prod_code_ver
+      ON product_formulations(product_id, code, version_no);
+    -- formulation_components
+    CREATE TABLE IF NOT EXISTS formulation_components (
+      id INTEGER PRIMARY KEY,
+      formulation_id INTEGER NOT NULL REFERENCES product_formulations(id) ON DELETE CASCADE,
+      index_series_id INTEGER NOT NULL,
+      weight_pct NUMERIC(9,6) NOT NULL,
+      base_index_value NUMERIC(18,6) NULL,
+      note TEXT NULL
+    );
+    CREATE INDEX IF NOT EXISTS ix_components_formulation ON formulation_components(formulation_id);
+    """)
+
 router = APIRouter(prefix="/api/formulations", tags=["formulations"])
-DB_PATH = Path(__file__).resolve().parents[2] / "app.db"
+DB_PATH = _resolve_db_path()
 
 getcontext().prec = 28
 
@@ -18,6 +78,10 @@ def _db() -> sqlite3.Connection:
     cx = sqlite3.connect(str(DB_PATH))
     cx.row_factory = sqlite3.Row
     cx.execute("PRAGMA foreign_keys = ON;")
+    try:
+        _ensure_schema(cx)
+    except Exception:
+        pass
     return cx
 
 
