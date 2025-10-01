@@ -18,6 +18,8 @@ import IndexSeriesTab from "../scenario/tabs/IndexSeriesTab";
 import RiseAndFallTab from "../scenario/tabs/RiseAndFallTab";
 // NEW: Rebates (scenario-level)
 import RebatesTab from "../scenario/tabs/RebatesTab";
+// NEW: Summary (final outcome)
+import SummaryTab from "../scenario/tabs/SummaryTab";
 
 // ---------- Types ----------
 type ScenarioDetail = {
@@ -51,7 +53,8 @@ type Workflow = {
 
 // Tabs (Escalation, Index, Rise&Fall & Rebates are ungated)
 type Tab =
-  | "pl"
+  | "pl"           // kept for backward-compat — maps to Summary
+  | "summary"      // preferred name going forward
   | "boq"
   | "twc"
   | "index"
@@ -145,7 +148,8 @@ export default function ScenarioPage() {
       alert("First mark 'Ready' in 7. TAX.");
       return;
     }
-    if (next === "pl" && !flow.is_services_ready) {
+    // Summary (was: P&L) remains gated by services readiness
+    if ((next === "pl" || next === "summary") && !flow.is_services_ready) {
       alert("First mark 'Ready' in 8. SERVICES.");
       return;
     }
@@ -209,7 +213,7 @@ export default function ScenarioPage() {
   const canGoFX = !!flow?.is_capex_ready;
   const canGoTAX = !!flow?.is_fx_ready;
   const canGoSERVICES = !!flow?.is_tax_ready;
-  const canGoPL = !!flow?.is_services_ready;
+  const canGoSUMMARY = !!flow?.is_services_ready; // replaces canGoPL
 
   const ws = (flow?.workflow_state ?? "draft").toString();
   const stateSafe =
@@ -221,8 +225,10 @@ export default function ScenarioPage() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-semibold">Scenario</h2>
+        </div>
+        <div className="text-sm">
           {data && (
-            <div className="text-sm text-gray-600">
+            <div className="text-sm text-gray-600 mb-2">
               ID: {data.id} • Name: <span className="font-medium">{data.name}</span>{" "}
               • Months: {data.months} • Start: {fmtDateISO(data.start_date)} • BC:{" "}
               <Link to={bcLink} className="text-indigo-600 underline">
@@ -230,8 +236,6 @@ export default function ScenarioPage() {
               </Link>
             </div>
           )}
-        </div>
-        <div className="text-sm">
           {flow && (
             <span
               className={cls(
@@ -260,7 +264,7 @@ export default function ScenarioPage() {
 
       {/* Tabs — order:
           1. BOQ, 2. TWC, 3. Index, 4. Escalation, (ungated) Rebates & Rise & Fall,
-          5. CAPEX, 6. FX, 7. TAX, 8. SERVICES, 9. P&L */}
+          5. CAPEX, 6. FX, 7. TAX, 8. SERVICES, 9. Summary */}
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={() => setTabSafe("boq")}
@@ -351,13 +355,14 @@ export default function ScenarioPage() {
           8. SERVICES
         </button>
 
+        {/* Summary (replaces P&L) */}
         <button
-          onClick={() => setTabSafe("pl")}
-          disabled={!canGoPL}
-          className={tabBtnClass(tab === "pl", !canGoPL)}
-          title={!canGoPL ? "First complete 8. SERVICES → Mark Ready." : "P&L (Output)"}
+          onClick={() => setTabSafe("summary")}
+          disabled={!canGoSUMMARY}
+          className={tabBtnClass(tab === "summary" || tab === "pl", !canGoSUMMARY)}
+          title={!canGoSUMMARY ? "First complete 8. SERVICES → Mark Ready." : "Summary (Output)"}
         >
-          9. P&L
+          9. Summary
         </button>
       </div>
 
@@ -466,18 +471,15 @@ export default function ScenarioPage() {
                 isReady={!!flow?.is_services_ready}
                 onMarkedReady={async () => {
                   await loadAll();
-                  setTabRaw("pl");
+                  setTabRaw("summary");
                 }}
               />
             </div>
           )}
 
-          {tab === "pl" && (
-            <div className="rounded border p-6 bg-emerald-50/40">
-              <h3 className="font-semibold text-lg mb-2">P&L (coming next)</h3>
-              <p className="text-sm text-gray-700">
-                When the workflow is READY, we’ll display the P&L summary and monthly breakdown here.
-              </p>
+          {(tab === "summary" || tab === "pl") && (
+            <div className="rounded border p-4 bg-white">
+              <SummaryTab scenarioId={id} />
             </div>
           )}
         </div>

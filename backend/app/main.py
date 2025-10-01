@@ -9,6 +9,7 @@ from .api.deps import get_current_user, CurrentUser
 from .api import service_pricing, boq_pricing, formulations_api, formulation_links_api
 from .api.escalation import router as escalation_router
 from app.api.rise_fall_api import router as rise_fall_router  # keep absolute to match pkg layout
+from app.api.rebates_runtime import router as rebates_runtime_router
 
 # Core modules
 from .api import (
@@ -170,3 +171,4 @@ app.include_router(rise_fall_router)
 
 # Products & Price Books
 app.include_router(products_router)
+app.include_router(rebates_runtime_router)
