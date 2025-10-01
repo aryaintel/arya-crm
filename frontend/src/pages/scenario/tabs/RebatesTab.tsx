@@ -32,23 +32,30 @@ type RebateRow = {
   is_active: boolean;
   notes?: string | null;
   // kind-specific
-  percent?: number | null; // percent
-  tiers?: Array<{
-    id: number;
-    rebate_id: number;
-    min_value: number;
-    max_value?: number | null;
-    percent: number;
-    sort_order: number;
-  }> | null;
-  lumps?: Array<{
-    id: number;
-    rebate_id: number;
-    year: number;
-    month: number;
-    amount: number;
-    description?: string | null;
-  }> | null;
+  percent?: number | null; // for kind="percent"
+  tiers?:
+    | Array<{
+        id: number;
+        rebate_id: number;
+        min_value: number;
+        max_value?: number | null;
+        percent?: number | null;
+        amount?: number | null;
+        description?: string | null;
+        sort_order: number;
+      }>
+    | null;
+  lumps?:
+    | Array<{
+        id: number;
+        rebate_id: number;
+        year: number;
+        month: number;
+        amount: number;
+        currency?: string | null;
+        note?: string | null;
+      }>
+    | null;
 };
 
 type Draft = {
@@ -76,12 +83,13 @@ type Draft = {
     percent?: string;
   }>;
 
-  // lumps
+  // lumps (API expects currency/note)
   lumps?: Array<{
     year?: string;
     month?: string;
     amount?: string;
-    description?: string;
+    currency?: string;
+    note?: string;
   }>;
 };
 
@@ -278,10 +286,7 @@ const cellClass = "px-2 py-1 border-b border-gray-200 text-sm";
 
 type RequestInitEx = RequestInit & { query?: Record<string, any> };
 
-async function api<T>(
-  path: string,
-  init?: RequestInitEx
-): Promise<T> {
+async function api<T>(path: string, init?: RequestInitEx): Promise<T> {
   const base = API_BASE || window.location.origin;
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   const withPrefix = `${API_PREFIX.replace(/\/+$/, "")}${cleanPath}`;
@@ -309,11 +314,11 @@ async function api<T>(
     if (bearer) headers["Authorization"] = bearer;
   }
 
-  // *** FIX: headers son söz olacak şekilde sırayı değiştir ***
+  // headers must be applied last so Authorization is preserved
   const res = await fetch(url.toString(), {
-    ...init,                          // (Önce init)
+    ...init,
     credentials: "include",
-    headers,                          // (Sonra birleşik headers → Authorization korunur)
+    headers,
   });
 
   if (!res.ok) {
@@ -395,7 +400,8 @@ function rowToDraft(r: RebateRow): Draft {
       year: String(l.year ?? ""),
       month: String(l.month ?? ""),
       amount: String(l.amount ?? 0),
-      description: l.description ?? "",
+      currency: l.currency ?? "USD",
+      note: l.note ?? "",
     })),
   };
 }
@@ -425,8 +431,8 @@ function buildSubmitBody(d: Draft) {
   if (d.kind === "tier_percent") {
     const tiers = (d.tiers || []).map((t, idx) => ({
       min_value: Number(t.min_value ?? 0),
-      max_value: t.max_value == null ? null : Number(t.max_value),
-      percent: t.percent == null ? 0 : Number(t.percent),
+      max_value: t.max_value == null || t.max_value === "" ? null : Number(t.max_value),
+      percent: t.percent == null || t.percent === "" ? 0 : Number(t.percent),
       sort_order: idx,
     }));
     return { ...base, tiers };
@@ -437,7 +443,8 @@ function buildSubmitBody(d: Draft) {
     year: Number(l.year ?? 0),
     month: Number(l.month ?? 0),
     amount: Number(l.amount ?? 0),
-    description: l.description || "",
+    currency: (l.currency && l.currency.trim()) || "USD",
+    note: l.note || "",
   }));
   return { ...base, lumps };
 }
@@ -453,6 +460,21 @@ function formatValidity(
   return `${p1} → ${p2}`;
 }
 
+function fmt(n?: number | null) {
+  if (n == null || Number.isNaN(n)) return "—";
+  return String(n);
+}
+
+function pct(n?: number | null) {
+  if (n == null || Number.isNaN(n)) return "—";
+  return `${n}%`;
+}
+
+function ym(y?: number | null, m?: number | null) {
+  if (!y || !m) return "—";
+  return `${String(m).padStart(2, "0")}/${y}`;
+}
+
 // -------------------------- UI ---------------------
 
 export default function RebatesTab(props: { scenarioId?: number }) {
@@ -464,6 +486,7 @@ export default function RebatesTab(props: { scenarioId?: number }) {
   const [err, setErr] = useState<string | null>(null);
   const [edit, setEdit] = useState<EditState>({ mode: "none" });
   const [refreshTick, setRefreshTick] = useState(0);
+  const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const doRefresh = () => setRefreshTick((t) => t + 1);
 
   useEffect(() => {
@@ -527,12 +550,12 @@ export default function RebatesTab(props: { scenarioId?: number }) {
     if (!scenarioId) return;
     if (edit.mode === "none") return;
 
-    const d = edit.mode === "create" ? edit.draft : edit.draft;
+    const d = edit.draft;
     if (!d.name || !d.kind || !d.scope || !d.basis) {
       alert("name, kind, scope and basis are required.");
       return;
     }
-    if (d.kind === "percent" && (d.percent_value === undefined || d.percent_value === null)) {
+    if (d.kind === "percent" && (d.percent_value === undefined || d.percent_value === null || d.percent_value === "")) {
       alert("percent_value is required for kind='percent'.");
       return;
     }
@@ -560,15 +583,113 @@ export default function RebatesTab(props: { scenarioId?: number }) {
     }
   };
 
+  const toggleDetails = (id: number) => {
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const renderDetails = (r: RebateRow) => {
+    return (
+      <div className="bg-gray-50 rounded p-3 text-xs text-gray-700">
+        {/* Notes */}
+        {(r.notes && r.notes.trim() !== "") && (
+          <div className="mb-2">
+            <span className="font-semibold">Notes:</span> {r.notes}
+          </div>
+        )}
+
+        {/* Percent summary */}
+        {r.kind === "percent" && (
+          <div className="mb-2">
+            <span className="font-semibold">Flat Percent:</span> {pct(r.percent)}
+          </div>
+        )}
+
+        {/* Tiers summary */}
+        {r.kind === "tier_percent" && (
+          <div className="mb-2">
+            <div className="font-semibold mb-1">Tiers:</div>
+            {(r.tiers && r.tiers.length > 0) ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-[640px] border border-gray-200">
+                  <thead className="bg-white">
+                    <tr>
+                      <th className="px-2 py-1 border-b text-left">#</th>
+                      <th className="px-2 py-1 border-b text-left">Min</th>
+                      <th className="px-2 py-1 border-b text-left">Max</th>
+                      <th className="px-2 py-1 border-b text-left">%</th>
+                      <th className="px-2 py-1 border-b text-left">Amount</th>
+                      <th className="px-2 py-1 border-b text-left">Desc</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...r.tiers].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((t, i) => (
+                      <tr key={t.id ?? i} className="odd:bg-gray-50">
+                        <td className="px-2 py-1 border-b">{t.sort_order ?? i}</td>
+                        <td className="px-2 py-1 border-b">{fmt(t.min_value)}</td>
+                        <td className="px-2 py-1 border-b">{t.max_value == null ? "∞" : fmt(t.max_value)}</td>
+                        <td className="px-2 py-1 border-b">{t.percent == null ? "—" : `${t.percent}%`}</td>
+                        <td className="px-2 py-1 border-b">{t.amount == null ? "—" : fmt(t.amount)}</td>
+                        <td className="px-2 py-1 border-b">{t.description || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-gray-500">No tiers.</div>
+            )}
+          </div>
+        )}
+
+        {/* Lumps summary */}
+        {r.kind === "lump_sum" && (
+          <div className="mb-2">
+            <div className="font-semibold mb-1">Lump Sums:</div>
+            {(r.lumps && r.lumps.length > 0) ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-[640px] border border-gray-200">
+                  <thead className="bg-white">
+                    <tr>
+                      <th className="px-2 py-1 border-b text-left">Year/Month</th>
+                      <th className="px-2 py-1 border-b text-left">Amount</th>
+                      <th className="px-2 py-1 border-b text-left">Currency</th>
+                      <th className="px-2 py-1 border-b text-left">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {r.lumps.map((l, i) => (
+                      <tr key={l.id ?? i} className="odd:bg-gray-50">
+                        <td className="px-2 py-1 border-b">{ym(l.year, l.month)}</td>
+                        <td className="px-2 py-1 border-b">{fmt(l.amount)}</td>
+                        <td className="px-2 py-1 border-b">{l.currency || "USD"}</td>
+                        <td className="px-2 py-1 border-b">{l.note || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-gray-500">No lump entries.</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-4">
-      {/* Liste */}
+      {/* List */}
       <div className="rounded border p-4 bg-white">
         <div className="flex justify-between items-center mb-3">
           <h3 className="font-semibold">Scenario Rebates</h3>
           <div className="flex gap-2">
-            <button className="btn btn-secondary" onClick={doRefresh}>Refresh</button>
-            <button className="btn btn-primary" onClick={startCreate}>New Rebate</button>
+            <button className="btn btn-secondary" onClick={doRefresh}>
+              Refresh
+            </button>
+            <button className="btn btn-primary" onClick={startCreate}>
+              New Rebate
+            </button>
           </div>
         </div>
         {loading && <div className="text-sm text-gray-500">Loading...</div>}
@@ -593,29 +714,53 @@ export default function RebatesTab(props: { scenarioId?: number }) {
             </thead>
             <tbody>
               {items.map((r) => (
-                <tr key={r.id}>
-                  <td className={cellClass}>{r.name}</td>
-                  <td className={cellClass}>{r.kind}</td>
-                  <td className={cellClass}>{r.scope}</td>
-                  <td className={cellClass}>{r.basis}</td>
-                  <td className={cellClass}>{formatValidity(r.valid_from_year, r.valid_from_month, r.valid_to_year, r.valid_to_month)}</td>
-                  <td className={cellClass}>{r.accrual_method}</td>
-                  <td className={cellClass}>{r.pay_month_lag ?? 0}</td>
-                  <td className={cellClass}>
-                    <span className={r.is_active ? "text-green-600" : "text-gray-500"}>
-                      {r.is_active ? "Active" : "Inactive"}
-                    </span>
-                  </td>
-                  <td className={cellClass}>
-                    <div className="flex gap-2">
-                      <button className="btn btn-xs" onClick={() => startEdit(r)}>Edit</button>
-                      <button className="btn btn-xs" onClick={() => toggleActive(r)}>
-                        {r.is_active ? "Deactivate" : "Activate"}
-                      </button>
-                      <button className="btn btn-xs btn-danger" onClick={() => remove(r)}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
+                <React.Fragment key={r.id}>
+                  <tr>
+                    <td className={cellClass}>{r.name}</td>
+                    <td className={cellClass}>{r.kind}</td>
+                    <td className={cellClass}>{r.scope}</td>
+                    <td className={cellClass}>{r.basis}</td>
+                    <td className={cellClass}>
+                      {formatValidity(
+                        r.valid_from_year,
+                        r.valid_from_month,
+                        r.valid_to_year,
+                        r.valid_to_month
+                      )}
+                    </td>
+                    <td className={cellClass}>{r.accrual_method}</td>
+                    <td className={cellClass}>{r.pay_month_lag ?? 0}</td>
+                    <td className={cellClass}>
+                      <span className={r.is_active ? "text-green-600" : "text-gray-500"}>
+                        {r.is_active ? "Active" : "Inactive"}
+                      </span>
+                    </td>
+                    <td className={cellClass}>
+                      <div className="flex gap-2">
+                        <button className="btn btn-xs" onClick={() => startEdit(r)}>
+                          Edit
+                        </button>
+                        <button className="btn btn-xs" onClick={() => toggleActive(r)}>
+                          {r.is_active ? "Deactivate" : "Activate"}
+                        </button>
+                        <button className="btn btn-xs" onClick={() => toggleDetails(r.id)}>
+                          {expanded[r.id] ? "Hide" : "Details"}
+                        </button>
+                        <button className="btn btn-xs btn-danger" onClick={() => remove(r)}>
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+
+                  {expanded[r.id] && (
+                    <tr>
+                      <td className="px-2 py-2 bg-gray-50" colSpan={9}>
+                        {renderDetails(r)}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -625,17 +770,29 @@ export default function RebatesTab(props: { scenarioId?: number }) {
       {/* Create / Edit Form */}
       {(edit.mode === "create" || edit.mode === "edit") && (
         <div className="rounded border p-4 bg-white">
-          <h3 className="font-semibold mb-3">{edit.mode === "create" ? "Create Rebate" : "Edit Rebate"}</h3>
+          <h3 className="font-semibold mb-3">
+            {edit.mode === "create" ? "Create Rebate" : "Edit Rebate"}
+          </h3>
 
           {/* Basic fields */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs text-gray-500 mb-1">Name</label>
-              <input className="w-full border rounded px-2 py-1" value={edit.draft.name} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, name: e.target.value } })} />
+              <input
+                className="w-full border rounded px-2 py-1"
+                value={edit.draft.name}
+                onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, name: e.target.value } })}
+              />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Scope</label>
-              <select className="w-full border rounded px-2 py-1" value={edit.draft.scope} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, scope: e.target.value as RebateScope } })}>
+              <select
+                className="w-full border rounded px-2 py-1"
+                value={edit.draft.scope}
+                onChange={(e) =>
+                  setEdit({ ...edit, draft: { ...edit.draft, scope: e.target.value as RebateScope } })
+                }
+              >
                 <option value="all">all</option>
                 <option value="boq">boq</option>
                 <option value="services">services</option>
@@ -644,7 +801,13 @@ export default function RebatesTab(props: { scenarioId?: number }) {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Kind</label>
-              <select className="w-full border rounded px-2 py-1" value={edit.draft.kind} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, kind: e.target.value as RebateKind } })}>
+              <select
+                className="w-full border rounded px-2 py-1"
+                value={edit.draft.kind}
+                onChange={(e) =>
+                  setEdit({ ...edit, draft: { ...edit.draft, kind: e.target.value as RebateKind } })
+                }
+              >
                 <option value="percent">percent</option>
                 <option value="tier_percent">tier_percent</option>
                 <option value="lump_sum">lump_sum</option>
@@ -652,7 +815,13 @@ export default function RebatesTab(props: { scenarioId?: number }) {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Basis</label>
-              <select className="w-full border rounded px-2 py-1" value={edit.draft.basis} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, basis: e.target.value as RebateBasis } })}>
+              <select
+                className="w-full border rounded px-2 py-1"
+                value={edit.draft.basis}
+                onChange={(e) =>
+                  setEdit({ ...edit, draft: { ...edit.draft, basis: e.target.value as RebateBasis } })
+                }
+              >
                 <option value="revenue">revenue</option>
                 <option value="gross_margin">gross_margin</option>
                 <option value="volume">volume</option>
@@ -660,11 +829,27 @@ export default function RebatesTab(props: { scenarioId?: number }) {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Product ID (when scope=product)</label>
-              <input className="w-full border rounded px-2 py-1" placeholder="e.g. 101" value={edit.draft.product_id || ""} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, product_id: e.target.value } })} />
+              <input
+                className="w-full border rounded px-2 py-1"
+                placeholder="e.g. 101"
+                value={edit.draft.product_id || ""}
+                onChange={(e) =>
+                  setEdit({ ...edit, draft: { ...edit.draft, product_id: e.target.value } })
+                }
+              />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Accrual Method</label>
-              <select className="w-full border rounded px-2 py-1" value={edit.draft.accrual_method} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, accrual_method: e.target.value as any } })}>
+              <select
+                className="w-full border rounded px-2 py-1"
+                value={edit.draft.accrual_method}
+                onChange={(e) =>
+                  setEdit({
+                    ...edit,
+                    draft: { ...edit.draft, accrual_method: e.target.value as any },
+                  })
+                }
+              >
                 <option value="monthly">monthly</option>
                 <option value="quarterly">quarterly</option>
                 <option value="annual">annual</option>
@@ -673,11 +858,23 @@ export default function RebatesTab(props: { scenarioId?: number }) {
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Pay Month Lag</label>
-              <input className="w-full border rounded px-2 py-1" value={edit.draft.pay_month_lag || "0"} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, pay_month_lag: e.target.value } })} />
+              <input
+                className="w-full border rounded px-2 py-1"
+                value={edit.draft.pay_month_lag || "0"}
+                onChange={(e) =>
+                  setEdit({ ...edit, draft: { ...edit.draft, pay_month_lag: e.target.value } })
+                }
+              />
             </div>
             <div>
               <label className="block text-xs text-gray-500 mb-1">Notes</label>
-              <textarea className="w-full border rounded px-2 py-1" value={edit.draft.notes || ""} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, notes: e.target.value } })} />
+              <textarea
+                className="w-full border rounded px-2 py-1"
+                value={edit.draft.notes || ""}
+                onChange={(e) =>
+                  setEdit({ ...edit, draft: { ...edit.draft, notes: e.target.value } })
+                }
+              />
             </div>
           </div>
 
@@ -685,7 +882,14 @@ export default function RebatesTab(props: { scenarioId?: number }) {
           {edit.draft.kind === "percent" && (
             <div className="mt-4">
               <label className="block text-xs text-gray-500 mb-1">Flat percent</label>
-              <input className="w-full border rounded px-2 py-1" placeholder="Percent (%)" value={edit.draft.percent_value || ""} onChange={(e) => setEdit({ ...edit, draft: { ...edit.draft, percent_value: e.target.value } })} />
+              <input
+                className="w-full border rounded px-2 py-1"
+                placeholder="Percent (%)"
+                value={edit.draft.percent_value || ""}
+                onChange={(e) =>
+                  setEdit({ ...edit, draft: { ...edit.draft, percent_value: e.target.value } })
+                }
+              />
             </div>
           )}
 
@@ -694,24 +898,47 @@ export default function RebatesTab(props: { scenarioId?: number }) {
               <div className="text-xs text-gray-500 mb-1">Tiers</div>
               {(edit.draft.tiers || []).map((t, i) => (
                 <div className="grid grid-cols-3 gap-2 mb-2" key={i}>
-                  <input className="border rounded px-2 py-1" placeholder="Min value" value={t.min_value || ""} onChange={(e) => {
-                    const tiers = [...(edit.draft.tiers || [])];
-                    tiers[i] = { ...tiers[i], min_value: e.target.value };
-                    setEdit({ ...edit, draft: { ...edit.draft, tiers } });
-                  }} />
-                  <input className="border rounded px-2 py-1" placeholder="Max value (optional)" value={t.max_value || ""} onChange={(e) => {
-                    const tiers = [...(edit.draft.tiers || [])];
-                    tiers[i] = { ...tiers[i], max_value: e.target.value };
-                    setEdit({ ...edit, draft: { ...edit.draft, tiers } });
-                  }} />
-                  <input className="border rounded px-2 py-1" placeholder="Percent (%)" value={t.percent || ""} onChange={(e) => {
-                    const tiers = [...(edit.draft.tiers || [])];
-                    tiers[i] = { ...tiers[i], percent: e.target.value };
-                    setEdit({ ...edit, draft: { ...edit.draft, tiers } });
-                  }} />
+                  <input
+                    className="border rounded px-2 py-1"
+                    placeholder="Min value"
+                    value={t.min_value || ""}
+                    onChange={(e) => {
+                      const tiers = [...(edit.draft.tiers || [])];
+                      tiers[i] = { ...tiers[i], min_value: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, tiers } });
+                    }}
+                  />
+                  <input
+                    className="border rounded px-2 py-1"
+                    placeholder="Max value (optional)"
+                    value={t.max_value || ""}
+                    onChange={(e) => {
+                      const tiers = [...(edit.draft.tiers || [])];
+                      tiers[i] = { ...tiers[i], max_value: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, tiers } });
+                    }}
+                  />
+                  <input
+                    className="border rounded px-2 py-1"
+                    placeholder="Percent (%)"
+                    value={t.percent || ""}
+                    onChange={(e) => {
+                      const tiers = [...(edit.draft.tiers || [])];
+                      tiers[i] = { ...tiers[i], percent: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, tiers } });
+                    }}
+                  />
                 </div>
               ))}
-              <button className="btn btn-xs" onClick={() => setEdit({ ...edit, draft: { ...edit.draft, tiers: [...(edit.draft.tiers || []), {}] } })}>
+              <button
+                className="btn btn-xs"
+                onClick={() =>
+                  setEdit({
+                    ...edit,
+                    draft: { ...edit.draft, tiers: [...(edit.draft.tiers || []), {}] },
+                  })
+                }
+              >
                 + Add Tier
               </button>
             </div>
@@ -721,33 +948,74 @@ export default function RebatesTab(props: { scenarioId?: number }) {
             <div className="mt-4">
               <div className="text-xs text-gray-500 mb-1">Lump sums</div>
               {(edit.draft.lumps || []).map((l, i) => (
-                <div className="grid grid-cols-4 gap-2 mb-2" key={i}>
-                  <input className="border rounded px-2 py-1" placeholder="Year" value={l.year || ""} onChange={(e) => {
-                    const lumps = [...(edit.draft.lumps || [])];
-                    lumps[i] = { ...lumps[i], year: e.target.value };
-                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
-                  }} />
-                  <select className="border rounded px-2 py-1" value={l.month || ""} onChange={(e) => {
-                    const lumps = [...(edit.draft.lumps || [])];
-                    lumps[i] = { ...lumps[i], month: e.target.value };
-                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
-                  }}>
+                <div className="grid grid-cols-5 gap-2 mb-2" key={i}>
+                  <input
+                    className="border rounded px-2 py-1"
+                    placeholder="Year"
+                    value={l.year || ""}
+                    onChange={(e) => {
+                      const lumps = [...(edit.draft.lumps || [])];
+                      lumps[i] = { ...lumps[i], year: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                    }}
+                  />
+                  <select
+                    className="border rounded px-2 py-1"
+                    value={l.month || ""}
+                    onChange={(e) => {
+                      const lumps = [...(edit.draft.lumps || [])];
+                      lumps[i] = { ...lumps[i], month: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                    }}
+                  >
                     <option value="">--</option>
-                    {MONTHS.map((m) => <option key={m} value={m}>{m}</option>)}
+                    {MONTHS.map((m) => (
+                      <option key={m} value={m}>
+                        {m}
+                      </option>
+                    ))}
                   </select>
-                  <input className="border rounded px-2 py-1" placeholder="Amount" value={l.amount || ""} onChange={(e) => {
-                    const lumps = [...(edit.draft.lumps || [])];
-                    lumps[i] = { ...lumps[i], amount: e.target.value };
-                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
-                  }} />
-                  <input className="border rounded px-2 py-1" placeholder="Description" value={l.description || ""} onChange={(e) => {
-                    const lumps = [...(edit.draft.lumps || [])];
-                    lumps[i] = { ...lumps[i], description: e.target.value };
-                    setEdit({ ...edit, draft: { ...edit.draft, lumps } });
-                  }} />
+                  <input
+                    className="border rounded px-2 py-1"
+                    placeholder="Amount"
+                    value={l.amount || ""}
+                    onChange={(e) => {
+                      const lumps = [...(edit.draft.lumps || [])];
+                      lumps[i] = { ...lumps[i], amount: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                    }}
+                  />
+                  <input
+                    className="border rounded px-2 py-1"
+                    placeholder="Currency (e.g. USD)"
+                    value={l.currency || "USD"}
+                    onChange={(e) => {
+                      const lumps = [...(edit.draft.lumps || [])];
+                      lumps[i] = { ...lumps[i], currency: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                    }}
+                  />
+                  <input
+                    className="border rounded px-2 py-1"
+                    placeholder="Note"
+                    value={l.note || ""}
+                    onChange={(e) => {
+                      const lumps = [...(edit.draft.lumps || [])];
+                      lumps[i] = { ...lumps[i], note: e.target.value };
+                      setEdit({ ...edit, draft: { ...edit.draft, lumps } });
+                    }}
+                  />
                 </div>
               ))}
-              <button className="btn btn-xs" onClick={() => setEdit({ ...edit, draft: { ...edit.draft, lumps: [...(edit.draft.lumps || []), {}] } })}>
+              <button
+                className="btn btn-xs"
+                onClick={() =>
+                  setEdit({
+                    ...edit,
+                    draft: { ...edit.draft, lumps: [...(edit.draft.lumps || []), { currency: "USD" }] },
+                  })
+                }
+              >
                 + Add Lump
               </button>
             </div>
@@ -755,8 +1023,12 @@ export default function RebatesTab(props: { scenarioId?: number }) {
 
           {/* Actions */}
           <div className="mt-4 flex gap-2">
-            <button className="btn btn-secondary" onClick={cancelEdit}>Cancel</button>
-            <button className="btn btn-primary" onClick={onSave}>Save</button>
+            <button className="btn btn-secondary" onClick={cancelEdit}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={onSave}>
+              Save
+            </button>
           </div>
         </div>
       )}
