@@ -16,6 +16,8 @@ import EscalationTab from "../scenario/tabs/EscalationTab";
 import IndexSeriesTab from "../scenario/tabs/IndexSeriesTab";
 // NEW: Rise & Fall (formulation)
 import RiseAndFallTab from "../scenario/tabs/RiseAndFallTab";
+// NEW: Rebates (scenario-level)
+import RebatesTab from "../scenario/tabs/RebatesTab";
 
 // ---------- Types ----------
 type ScenarioDetail = {
@@ -47,13 +49,14 @@ type Workflow = {
   is_services_ready?: boolean;
 };
 
-// Tabs (Escalation, Index & Rise&Fall are ungated)
+// Tabs (Escalation, Index, Rise&Fall & Rebates are ungated)
 type Tab =
   | "pl"
   | "boq"
   | "twc"
   | "index"
   | "escalation"
+  | "rebates"
   | "risefall"
   | "capex"
   | "fx"
@@ -116,7 +119,7 @@ export default function ScenarioPage() {
     );
   }
 
-  // Escalation, Index & Rise&Fall are always accessible; others are workflow-guarded
+  // Escalation, Index, Rise&Fall ve Rebates her zaman erişilebilir; diğerleri workflow-guarded
   function setTabSafe(next: Tab) {
     if (!flow) {
       setTabRaw(next);
@@ -256,7 +259,8 @@ export default function ScenarioPage() {
       </div>
 
       {/* Tabs — order:
-          1. BOQ, 2. TWC, 3. Index, 4. Escalation, (ungated) Rise & Fall, 5. CAPEX, 6. FX, 7. TAX, 8. SERVICES, 9. P&L */}
+          1. BOQ, 2. TWC, 3. Index, 4. Escalation, (ungated) Rebates & Rise & Fall,
+          5. CAPEX, 6. FX, 7. TAX, 8. SERVICES, 9. P&L */}
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={() => setTabSafe("boq")}
@@ -291,6 +295,15 @@ export default function ScenarioPage() {
           title="Escalation (Policies & resolve)"
         >
           4. Escalation
+        </button>
+
+        {/* NEW: Rebates (ungated) */}
+        <button
+          onClick={() => setTabRaw("rebates")}
+          className={tabBtnClass(tab === "rebates")}
+          title="Scenario Rebates"
+        >
+          Rebates
         </button>
 
         {/* NEW: Rise & Fall (ungated) */}
@@ -392,6 +405,12 @@ export default function ScenarioPage() {
           {tab === "escalation" && (
             <div className="rounded border p-4 bg-white">
               <EscalationTab scenarioId={id} />
+            </div>
+          )}
+
+          {tab === "rebates" && (
+            <div className="rounded border p-4 bg-white">
+              <RebatesTab scenarioId={id} />
             </div>
           )}
 

@@ -46,36 +46,65 @@ app = FastAPI(title="Arya CRM API")
 # ---------------------------
 # CORS (frontend dev servers)
 # ---------------------------
-default_cors_origins = [
+DEFAULT_CORS_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "http://localhost",
+    "http://127.0.0.1",
 ]
-allow_origins = getattr(settings, "CORS_ALLOW_ORIGINS", default_cors_origins)
 
-# 1) Standard CORS middleware — must be added BEFORE routers
+def _resolve_allowed_origins() -> list[str]:
+    # settings.CORS_ALLOW_ORIGINS virgüllü string (veya liste) olabilir
+    raw = getattr(settings, "CORS_ALLOW_ORIGINS", None)
+    if not raw:
+        return DEFAULT_CORS_ORIGINS
+    if isinstance(raw, (list, tuple)):
+        vals = [str(x).strip().rstrip("/") for x in raw if str(x).strip()]
+    else:
+        vals = [s.strip().rstrip("/") for s in str(raw).split(",") if s.strip()]
+    # Güvensiz yıldız kullanımı varsa dev için güvenli listeye indir
+    if len(vals) == 1 and vals[0] == "*":
+        return DEFAULT_CORS_ORIGINS
+    return vals or DEFAULT_CORS_ORIGINS
+
+ALLOW_ORIGINS = _resolve_allowed_origins()
+
+# 1) CORSMiddleware — routers'tan ÖNCE
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
-    allow_credentials=True,
+    allow_origins=ALLOW_ORIGINS,
+    allow_credentials=True,  # cookie/session için gerekli
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 2) Safety net: ensure CORS headers on ALL responses (401/404/500 included)
+# 2) Safety net: tüm response'larda (401/404/500 dahil) doğru CORS header'ını ZORLA
 @app.middleware("http")
 async def ensure_cors_headers(request: Request, call_next):
     response = await call_next(request)
     origin = request.headers.get("origin")
-    if origin and (origin in allow_origins or "*" in allow_origins):
-        # Mirror origin when credentials are used
-        response.headers.setdefault("Access-Control-Allow-Origin", origin)
-        response.headers.setdefault("Vary", "Origin")
-        response.headers.setdefault("Access-Control-Allow-Credentials", "true")
+    if origin and (origin in ALLOW_ORIGINS):
+        # Her durumda origin'i aynen yansıt (CORSMiddleware'ın * koyduğu durumları da ezer)
+        response.headers["Access-Control-Allow-Origin"] = origin
+        # Credentials modunda vary by Origin önemli
+        prev_vary = response.headers.get("Vary")
+        response.headers["Vary"] = "Origin" if not prev_vary else (
+            prev_vary if "Origin" in prev_vary.split(",") else prev_vary + ", Origin"
+        )
+        response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
 
-
+@app.middleware("http")
+async def _debug_auth(request, call_next):
+    if request.url.path.startswith("/api/scenarios/") and request.url.path.endswith("/rebates"):
+        print(">>> DEBUG REBATES CALL",
+              "Origin=", request.headers.get("origin"),
+              "Cookie=", bool(request.headers.get("cookie")))
+    return await call_next(request)
 # ---------------------------
 # Health & Current User
 # ---------------------------
@@ -92,7 +121,7 @@ def me(current: CurrentUser = Depends(get_current_user)):
         "role": current.role_name,
     }
 
-# Alias to support older frontends expecting /auth/me
+# Eski frontendler için alias
 @app.get("/auth/me", tags=["auth"], status_code=status.HTTP_200_OK)
 def me_alias(current: CurrentUser = Depends(get_current_user)):
     return {
