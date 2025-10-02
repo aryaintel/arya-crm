@@ -1,3 +1,4 @@
+# [BEGIN FILE] backend/app/models/__init__.py
 from sqlalchemy import (
     Column,
     Integer,
@@ -902,3 +903,4 @@ class ScenarioRebateLump(Base):
 # Create all (idempotent)
 # =========================
 Base.metadata.create_all(bind=engine)
+# [END FILE] backend/app/models/__init__.py

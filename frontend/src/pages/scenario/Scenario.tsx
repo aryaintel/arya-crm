@@ -1,3 +1,4 @@
+// frontend/src/pages/scenario/ScenarioPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { apiGet, ApiError } from "../../lib/api";
@@ -18,7 +19,7 @@ import IndexSeriesTab from "../scenario/tabs/IndexSeriesTab";
 import RiseAndFallTab from "../scenario/tabs/RiseAndFallTab";
 // NEW: Rebates (scenario-level)
 import RebatesTab from "../scenario/tabs/RebatesTab";
-// NEW: Summary (final outcome)
+// NEW: Summary (server-calculated)
 import SummaryTab from "../scenario/tabs/SummaryTab";
 
 // ---------- Types ----------
@@ -53,8 +54,8 @@ type Workflow = {
 
 // Tabs (Escalation, Index, Rise&Fall & Rebates are ungated)
 type Tab =
-  | "pl"           // kept for backward-compat — maps to Summary
-  | "summary"      // preferred name going forward
+  | "pl" // kept for backward-compat — maps to Summary
+  | "summary" // preferred name going forward
   | "boq"
   | "twc"
   | "index"
@@ -94,7 +95,13 @@ function tabBtnClass(active: boolean, disabled?: boolean) {
 const withTimeout = <T,>(p: Promise<T>, ms = 8000): Promise<T> =>
   new Promise((res, rej) => {
     const t = setTimeout(() => rej(new Error(`Request timed out in ${ms}ms`)), ms);
-    p.then(v => { clearTimeout(t); res(v); }).catch(e => { clearTimeout(t); rej(e); });
+    p.then((v) => {
+      clearTimeout(t);
+      res(v);
+    }).catch((e) => {
+      clearTimeout(t);
+      rej(e);
+    });
   });
 
 // ======================================================
@@ -216,8 +223,7 @@ export default function ScenarioPage() {
   const canGoSUMMARY = !!flow?.is_services_ready; // replaces canGoPL
 
   const ws = (flow?.workflow_state ?? "draft").toString();
-  const stateSafe =
-    ws === "ready" ? "READY" : ws.replace("_ready", "").toUpperCase();
+  const stateSafe = ws === "ready" ? "READY" : ws.replace("_ready", "").toUpperCase();
 
   return (
     <div className="space-y-4">
@@ -230,7 +236,7 @@ export default function ScenarioPage() {
           {data && (
             <div className="text-sm text-gray-600 mb-2">
               ID: {data.id} • Name: <span className="font-medium">{data.name}</span>{" "}
-              • Months: {data.months} • Start: {fmtDateISO(data.start_date)} • BC:{" "}
+              • Months: {data.months} • Start: {fmtDateISO(data.start_date)} • BC{" "}
               <Link to={bcLink} className="text-indigo-600 underline">
                 #{data.business_case_id}
               </Link>
@@ -253,10 +259,7 @@ export default function ScenarioPage() {
               State: {stateSafe}
             </span>
           )}
-          <button
-            onClick={loadAll}
-            className="ml-3 px-3 py-1 rounded bg-gray-100 hover:bg-gray-200"
-          >
+          <button onClick={loadAll} className="ml-3 px-3 py-1 rounded bg-gray-100 hover:bg-gray-200">
             Refresh
           </button>
         </div>
@@ -479,7 +482,12 @@ export default function ScenarioPage() {
 
           {(tab === "summary" || tab === "pl") && (
             <div className="rounded border p-4 bg-white">
-              <SummaryTab scenarioId={id} />
+              {/* UPDATED: pass startDate & months into SummaryTab */}
+              <SummaryTab
+                scenarioId={id}
+                startDate={data.start_date}
+                months={data.months}
+              />
             </div>
           )}
         </div>

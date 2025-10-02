@@ -5,12 +5,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 import sqlite3
+
 from fastapi import APIRouter, HTTPException, Query
 
-router = APIRouter(prefix="/api/scenarios", tags=["rebates-preview"])
+# Tek bir grupta görünsün: "rebates"
+router = APIRouter(prefix="/api/scenarios", tags=["rebates"])
 
-# Resolve DB (align with other sqlite-based APIs like service_pricing/boq_pricing)
+# Resolve DB (align with other sqlite-based APIs)
 DB_PATH = Path(__file__).resolve().parents[2] / "app.db"
+
 
 def _db() -> sqlite3.Connection:
     cx = sqlite3.connect(str(DB_PATH))
@@ -18,8 +21,27 @@ def _db() -> sqlite3.Connection:
     cx.execute("PRAGMA foreign_keys = ON;")
     return cx
 
-# ----------------- Time helpers -----------------
 
+# ----------------- Safe query helper -----------------
+def _fetchall(cx: sqlite3.Connection, sql: str, params: tuple = ()) -> List[sqlite3.Row]:
+    """
+    Run a SELECT and return [] if the table does not exist (first-time DBs).
+    Raise a clear HTTP 500 for other OperationalErrors to preserve CORS on errors.
+    """
+    try:
+        cur = cx.execute(sql, params)
+        return cur.fetchall()
+    except sqlite3.OperationalError as e:
+        msg = str(e).lower()
+        if "no such table" in msg:
+            return []
+        raise HTTPException(status_code=500, detail=f"DB operational error: {e}")
+    except sqlite3.Error as e:
+        # Other sqlite errors -> 500, but still a JSON response (CORS-safe)
+        raise HTTPException(status_code=500, detail=f"DB error: {e}")
+
+
+# ----------------- Time helpers -----------------
 def _parse_ym(ym: str) -> Tuple[int, int]:
     # "YYYY-MM"
     try:
@@ -31,21 +53,24 @@ def _parse_ym(ym: str) -> Tuple[int, int]:
     except Exception:
         raise HTTPException(400, f"Invalid ym='{ym}', expected YYYY-MM")
 
+
 def _ym_add(y: int, m: int, k: int) -> Tuple[int, int]:
     base = (y * 12 + (m - 1)) + k
     ny = base // 12
     nm = base % 12 + 1
     return ny, nm
 
+
 def _months_between(y0: int, m0: int, y1: int, m1: int) -> int:
     # inclusive months count
     return (y1 * 12 + (m1 - 1)) - (y0 * 12 + (m0 - 1)) + 1
 
+
 def _ym_key(y: int, m: int) -> str:
     return f"{y:04d}-{m:02d}"
 
-# ----------------- Domain models -----------------
 
+# ----------------- Domain models -----------------
 @dataclass
 class RebateDef:
     id: int
@@ -63,6 +88,7 @@ class RebateDef:
     pay_month_lag: int
     is_active: int
 
+
 @dataclass
 class RebateTier:
     min_value: float
@@ -71,6 +97,7 @@ class RebateTier:
     amount: Optional[float]
     sort_order: int
 
+
 @dataclass
 class RebateLump:
     year: int
@@ -78,21 +105,22 @@ class RebateLump:
     amount: float
     description: Optional[str]
 
-# ----------------- Loaders -----------------
 
+# ----------------- Loaders -----------------
 def _load_rebates(cx: sqlite3.Connection, scenario_id: int) -> List[RebateDef]:
-    rows = cx.execute(
+    rows = _fetchall(
+        cx,
         """
-        SELECT id, scenario_id, name, scope, kind, COALESCE(basis,'revenue') as basis,
+        SELECT id, scenario_id, name, scope, kind, COALESCE(basis,'revenue') AS basis,
                product_id, valid_from_year, valid_from_month, valid_to_year, valid_to_month,
-               COALESCE(accrual_method,'monthly') as accrual_method,
-               COALESCE(pay_month_lag,0) as pay_month_lag,
-               COALESCE(is_active,1) as is_active
+               COALESCE(accrual_method,'monthly') AS accrual_method,
+               COALESCE(pay_month_lag,0) AS pay_month_lag,
+               COALESCE(is_active,1) AS is_active
         FROM scenario_rebates
         WHERE scenario_id = ?
         """,
         (scenario_id,),
-    ).fetchall()
+    )
     out: List[RebateDef] = []
     for r in rows:
         out.append(
@@ -115,16 +143,18 @@ def _load_rebates(cx: sqlite3.Connection, scenario_id: int) -> List[RebateDef]:
         )
     return out
 
+
 def _load_tiers(cx: sqlite3.Connection, rebate_id: int) -> List[RebateTier]:
-    rows = cx.execute(
+    rows = _fetchall(
+        cx,
         """
-        SELECT min_value, max_value, percent, amount, COALESCE(sort_order,0) as sort_order
+        SELECT min_value, max_value, percent, amount, COALESCE(sort_order,0) AS sort_order
         FROM scenario_rebate_tiers
         WHERE rebate_id = ?
         ORDER BY sort_order ASC, id ASC
         """,
         (rebate_id,),
-    ).fetchall()
+    )
     out: List[RebateTier] = []
     for r in rows:
         out.append(
@@ -138,8 +168,10 @@ def _load_tiers(cx: sqlite3.Connection, rebate_id: int) -> List[RebateTier]:
         )
     return out
 
+
 def _load_lumps(cx: sqlite3.Connection, rebate_id: int) -> List[RebateLump]:
-    rows = cx.execute(
+    rows = _fetchall(
+        cx,
         """
         SELECT year, month, amount, description
         FROM scenario_rebate_lumps
@@ -147,7 +179,7 @@ def _load_lumps(cx: sqlite3.Connection, rebate_id: int) -> List[RebateLump]:
         ORDER BY year ASC, month ASC, id ASC
         """,
         (rebate_id,),
-    ).fetchall()
+    )
     out: List[RebateLump] = []
     for r in rows:
         out.append(
@@ -160,52 +192,50 @@ def _load_lumps(cx: sqlite3.Connection, rebate_id: int) -> List[RebateLump]:
         )
     return out
 
-# ----------------- Basis computation (first pass = BOQ revenue) -----------------
 
-def _basis_revenue_boq(cx: sqlite3.Connection, scenario_id: int, y: int, m: int, product_id: Optional[int]) -> float:
+# ----------------- Basis computation (first pass = BOQ revenue) -----------------
+def _basis_revenue_boq(
+    cx: sqlite3.Connection, scenario_id: int, y: int, m: int, product_id: Optional[int]
+) -> float:
     """
     Approximate revenue basis from BOQ static fields (quantity * unit_price).
     Respect start_year/month and frequency/months similar to FE P&L tab.
-    This will be upgraded to dynamic price previews (formulation + escalation) later.
+    This will be upgraded to dynamic price previews later.
     """
-    # Pull active BOQ items
-    rows = cx.execute(
+    rows = _fetchall(
+        cx,
         """
         SELECT id, quantity, unit_price, unit_cogs, frequency, months, start_year, start_month, product_id, is_active
         FROM scenario_boq_items
         WHERE scenario_id = ?
         """,
         (scenario_id,),
-    ).fetchall()
+    )
 
     total = 0.0
     for r in rows:
         if (r["is_active"] or 0) != 1:
             continue
-        sy = r["start_year"]; sm = r["start_month"]
+        sy = r["start_year"]
+        sm = r["start_month"]
         if sy is None or sm is None:
             continue
 
-        # is this row active at (y,m)?
-        freq = (r["frequency"] or "once").lower()
-        months = int(r["months"] or 1)
-
-        # optional product filter
+        # product filter
         if product_id is not None:
             pid = r["product_id"]
             if pid is None or int(pid) != int(product_id):
                 continue
 
         # schedule membership
+        freq = (r["frequency"] or "once").lower()
+        months = int(r["months"] or 1)
         in_month = False
         if freq == "monthly":
-            # month index k: 0 .. months-1
-            # check if (y,m) lies within that span
             start_idx = sy * 12 + (sm - 1)
             cur_idx = y * 12 + (m - 1)
             in_month = 0 <= (cur_idx - start_idx) < max(1, months)
         else:
-            # once/per_shipment/per_tonne → treat as single charge at start month
             in_month = (y == sy and m == sm)
 
         if in_month:
@@ -214,6 +244,7 @@ def _basis_revenue_boq(cx: sqlite3.Connection, scenario_id: int, y: int, m: int,
             total += qty * unit_price
 
     return total
+
 
 def _basis_value(
     cx: sqlite3.Connection,
@@ -231,17 +262,13 @@ def _basis_value(
     if rebate.basis != "revenue":
         return 0.0
 
-    if rebate.scope in ("all", "boq"):
+    if rebate.scope in ("all", "boq", "product"):
         return _basis_revenue_boq(cx, scenario_id, y, m, rebate.product_id)
-    elif rebate.scope == "product":
-        return _basis_revenue_boq(cx, scenario_id, y, m, rebate.product_id)
-    elif rebate.scope == "services":
-        # TODO: implement services revenue basis using services_price preview or static fields
-        return 0.0
+    # TODO: services revenue basis using services_price preview or static fields
     return 0.0
 
-# ----------------- Validity -----------------
 
+# ----------------- Validity -----------------
 def _is_within_validity(rebate: RebateDef, y: int, m: int) -> bool:
     if rebate.valid_from_year is not None and rebate.valid_from_month is not None:
         y0, m0 = rebate.valid_from_year, rebate.valid_from_month
@@ -253,8 +280,8 @@ def _is_within_validity(rebate: RebateDef, y: int, m: int) -> bool:
             return False
     return True
 
-# ----------------- Tier resolution -----------------
 
+# ----------------- Tier resolution -----------------
 def _resolve_percent_for_value(tiers: List[RebateTier], value: float) -> Optional[float]:
     """
     Return the 'percent' matching the given value using [min, max) semantics.
@@ -267,13 +294,12 @@ def _resolve_percent_for_value(tiers: List[RebateTier], value: float) -> Optiona
             return float(t.percent or 0.0) if t.percent is not None else None
     # if no max bound tiers matched, try the last tier that has percent and no max
     for t in reversed(tiers):
-        if t.max_value is None and t.percent is not None:
-            if value >= t.min_value:
-                return float(t.percent)
+        if t.max_value is None and t.percent is not None and value >= t.min_value:
+            return float(t.percent)
     return None
 
-# ----------------- Main logic -----------------
 
+# ----------------- Main logic -----------------
 @router.get("/{scenario_id}/rebates/preview")
 def rebates_preview(
     scenario_id: int,
@@ -286,6 +312,10 @@ def rebates_preview(
     Return monthly rebate accruals (contra revenue) and simple cash timing.
     NOTE: First release focuses on basis=revenue and scope in {all,boq,product}.
           Services scope and GM/Volume bases are placeholders for now.
+
+    Robustness:
+    - If underlying tables do not yet exist, returns empty schedule (items=[]).
+    - Any DB error returns JSON 500 with detail (so CORS stays intact).
     """
     y0, m0 = _parse_ym(frm)
     y1, m1 = _parse_ym(to)
@@ -294,6 +324,7 @@ def rebates_preview(
 
     with _db() as cx:
         rebates = [r for r in _load_rebates(cx, scenario_id) if r.is_active == 1]
+
         # Preload tiers/lumps per rebate
         tiers_map: Dict[int, List[RebateTier]] = {}
         lumps_map: Dict[int, List[RebateLump]] = {}
@@ -304,11 +335,8 @@ def rebates_preview(
                 lumps_map[r.id] = _load_lumps(cx, r.id)
 
         months = _months_between(y0, m0, y1, m1)
-        # Accumulators
         out_rows: List[Dict[str, object]] = []
-        # cash schedule map for lag application
         cash_map: Dict[str, float] = {}
-        # YTD accumulators per rebate id
         ytd_basis: Dict[int, float] = {}
 
         for i in range(months):
@@ -326,51 +354,37 @@ def rebates_preview(
                 cash = 0.0
 
                 if r.kind in ("percent", "tier_percent"):
-                    # compute basis for this month
                     basis_val = _basis_value(cx, scenario_id, r, y, m)
-
-                    # choose percent
                     pct = 0.0
                     if r.kind == "percent":
-                        # conventional: take first tier.percent
                         tiers = tiers_map.get(r.id, [])
-                        pct = 0.0
-                        if tiers:
-                            # prefer first tier.percent, or 0
-                            for t in tiers:
-                                if t.percent is not None:
-                                    pct = float(t.percent)
-                                    break
+                        for t in tiers:
+                            if t.percent is not None:
+                                pct = float(t.percent)
+                                break
                     else:
-                        # tier_percent
                         tiers = tiers_map.get(r.id, [])
                         if mode == "monthly":
                             pct_resolved = _resolve_percent_for_value(tiers, basis_val)
                             pct = float(pct_resolved or 0.0)
                         else:
-                            # YTD: evaluate against cumulative
                             prev = ytd_basis.get(r.id, 0.0)
                             cum = prev + basis_val
                             ytd_basis[r.id] = cum
                             pct_resolved = _resolve_percent_for_value(tiers, cum)
                             pct = float(pct_resolved or 0.0)
-                            # NOTE: first release does not compute retro true-up; it applies the YTD tier to the current month only.
 
-                    accrual = - (basis_val * (pct / 100.0))  # contra-revenue
-                    # Accrual timing: for "on_invoice", we still accrue in-month; cash follows pay_month_lag
-                    # Cash timing: apply lag (can be 0)
+                    accrual = -(basis_val * (pct / 100.0))  # contra-revenue
                     cash_target_y, cash_target_m = _ym_add(y, m, int(r.pay_month_lag or 0))
                     cash_key = _ym_key(cash_target_y, cash_target_m)
                     cash_map[cash_key] = cash_map.get(cash_key, 0.0) + accrual
                     cash = accrual
 
                 elif r.kind == "lump_sum":
-                    # pick lumps scheduled exactly at (y,m)
                     for l in lumps_map.get(r.id, []):
                         if l.year == y and l.month == m:
                             amount = -float(l.amount or 0.0)  # contra
                             accrual += amount
-                            # cash with lag
                             cash_target_y, cash_target_m = _ym_add(y, m, int(r.pay_month_lag or 0))
                             cash_key = _ym_key(cash_target_y, cash_target_m)
                             cash_map[cash_key] = cash_map.get(cash_key, 0.0) + amount
